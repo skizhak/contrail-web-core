@@ -1,6 +1,7 @@
 #
 # Copyright (c) 2014 Juniper Networks, Inc. All rights reserved.
 #
+#!/usr/bin/env bash
 
 THIRD_PARTY='../third_party'
 
