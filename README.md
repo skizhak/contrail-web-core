@@ -60,18 +60,26 @@ HTTPS clone URL:
 
 'make repos' downloads two more repos contrail-web-controller and contrail-third-party in contrail-web-controller and third_party directory respectively in parent directory.
     
+4) Now change the below two config variables:
+   In config/config.global.js (in contrail-web-core) change the below where your contrail-web-controller code resides.
+
+   config.featurePkg.webController.path = '/usr/src/contrail/contrail-web-controller';
+
+   In webroot/common/js/controller.config.global.js (in contrail-web-controller), change the below where your contrail-web-core code resides.
+   
+   config.core_path = '/usr/src/contrail/contrail-web-core';
 
 4) Execute the following commands under `contrail-web-core` directory to setup development environment. It downloads all the third-party libraries and generates the files required for Contrail Web UI.
 
     make fetch-pkgs-dev
-    make dev-env
+    make dev-env REPO=webController
 
 'make fetch-pkgs-dev' downloads all the third-party modules required for development. 
 
 'make dev-env' sets the environment for development. It copies all the third-party modules in correct path.
 Please note this step changes the file contents in dashboard.tmpl, login.tmpl and login-error.tmpl under webroot/html directory. So if you have any changes in any of these three files, before check-in, you MUST issue below command
     
-    make rem-ts-prod
+    make clear-cache-prod
 
 5) Start `redis-server` on port 6383, 6383 is the default port used by Contrail Web UI, the port can be changed as explained in 'Configuration parameters' section.
 
