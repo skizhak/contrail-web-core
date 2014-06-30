@@ -63,11 +63,11 @@ HTTPS clone URL:
 4) Now change the below two config variables:
    In config/config.global.js (in contrail-web-core) change the below where your contrail-web-controller code resides.
 
-   config.featurePkg.webController.path = '/usr/src/contrail/contrail-web-controller';
+    config.featurePkg.webController.path = '/usr/src/contrail/contrail-web-controller';
 
    In webroot/common/js/controller.config.global.js (in contrail-web-controller), change the below where your contrail-web-core code resides.
    
-   config.core_path = '/usr/src/contrail/contrail-web-core';
+    config.core_path = '/usr/src/contrail/contrail-web-core';
 
 4) Execute the following commands under `contrail-web-core` directory to setup development environment. It downloads all the third-party libraries and generates the files required for Contrail Web UI.
 
