@@ -1,37 +1,74 @@
 /*
  * Copyright (c) 2014 Juniper Networks, Inc. All rights reserved.
  */
+var assert = require('assert');
+var cluster = require('cluster');
+var args = process.argv.slice(2);
+var argsCnt = args.length;
+var configFile = null;
+for (var i = 0; i < argsCnt; i++) {
+    if (('--c' == args[i]) || ('--conf_file' == args[i])) {
+        if (null == args[i + 1]) {
+            console.error('Config file not provided');
+            assert(0);
+        } else {
+            configFile = args[i + 1];
+            try {
+                var tmpConfig = require(configFile);
+                if ((null == tmpConfig) || (typeof tmpConfig !== 'object')) {
+                    console.error('Config file ' + configFile + ' is not valid');
+                    assert(0);
+                }
+                break;
+            } catch(e) {
+                console.error('Config file ' + configFile + ' not found');
+                assert(0);
+            }
+        }
+    }
+}
 
-/* Set corePath before loading any other module */
+/* Set corePath before loading any other contrail module */
 var corePath = process.cwd();
-var config = require('./src/serverroot/common/config.utils').compareAndMergeDefaultConfig();
+var config =
+    require('./src/serverroot/common/config.utils').compareAndMergeDefaultConfig(configFile);
+
 exports.corePath = corePath;
 exports.config = config;
+
 var redisUtils = require('./src/serverroot/utils/redis.utils');
 var global = require('./src/serverroot/common/global');
+var jobsUtils = require('./src/serverroot/common/jobs.utils');
+var commonUtils = require('./src/serverroot/utils/common.utils');
+var async = require('async')
+var clusterUtils = require('./src/serverroot/utils/cluster.utils');
+
 var server_port = (config.redis_server_port) ?
     config.redis_server_port : global.DFLT_REDIS_SERVER_PORT;
 var server_ip = (config.redis_server_ip) ?
     config.redis_server_ip : global.DFLT_REDIS_SERVER_IP;
-redisUtils.createRedisClientAndWait(server_port, server_ip,
-                                    global.WEBUI_DFLT_REDIS_DB,
-                                    function() {
-    loadJobServer();
+
+function loadJobServer () {
+jobsUtils.jobKueEventEmitter.on('kueReady', function() {
+    /* Now start real server processing */
+    if (false == process.kueReinitReqd) {
+        return;
+    }
+    var purgeRedisClient = redisUtils.createRedisClient();//createDefRedisClientAndWait(function(purgeRedisClient) {
+    jobServerPurgeAndStart(purgeRedisClient, function() {
+        startServers();
+        process.kueReinitReqd = false;
+    });
 });
 
-function loadJobServer ()
-{
 var axon = require('axon')
-    , jobsApi = require('./src/serverroot/jobs/core/jobs.api')
     , assert = require('assert')
-    , jobsApi = require('./src/serverroot/jobs/core/jobs.api')
     , redisPub = require('./src/serverroot/jobs/core/redisPub')
     , kue = require('kue')
-    , commonUtils = require('./src/serverroot/utils/common.utils')
     , logutils = require('./src/serverroot/utils/log.utils')
     , discServ = require('./src/serverroot/jobs/core/discoveryservice.api')
-    , async = require('async')
     , fs = require('fs')
+    , jobsApi = require('./src/serverroot/jobs/core/jobs.api')
     , jsonPath = require('JSONPath').eval;
 
 var hostName = config.jobServer.server_ip
@@ -45,6 +82,9 @@ var discServEnable = ((null != config.discoveryService) &&
 
 var pkgList = commonUtils.mergeAllPackageList(global.service.MIDDLEWARE);
 assert(pkgList);
+exports.myIdentity = myIdentity;
+exports.discServEnable = discServEnable;
+exports.pkgList = pkgList;
 
 /* Function: processMsg
  Handler for message processing for messages coming from main Server
@@ -57,16 +97,25 @@ processMsg = function (msg) {
  This function is used to connect to main Server on host and port
  defined in config.global.js
  */
+var resetDone = false;
 connectToMainServer = function () {
+    if (true == resetDone) {
+        return;
+    }
     var connectURL = 'tcp://' + hostName + ":" + port;
     workerSock.connect(connectURL);
     logutils.logger.info('Job Server connected to port ' + port);
+    resetDone = true;
+    workerSock.on('message', function (msg) {
+        /* Now based on the message type, act */
+        processMsg(msg);
+    });
 }
 
 kueJobListen = function() {
     /* kue UI listening port */
     var kuePort = config.kue.ui_port || 3002;
-    kue.app.listen(kuePort);
+    kue.app.listen(kuePort, '127.0.0.1');
 }
 
 function createVRouterSummaryJob ()
@@ -100,6 +149,11 @@ function createVRouterGeneratorsJob ()
 
 function createJobsAtInit ()
 {
+    var authApi = require('./src/serverroot/common/auth.api');
+    if (true == authApi.isMultiRegionSupported()) {
+        /* Do not cache if multi region is supported */
+        return;
+    }
     createVRouterSummaryJob();
     createVRouterGeneratorsJob();
 }
@@ -148,7 +202,6 @@ function doFeatureTaskInit ()
 function startServers ()
 {
     kueJobListen();
-    connectToMainServer();
     registerTojobListenerEvent();
     jobsApi.doCheckJobsProcess();
     if (true == discServEnable) {
@@ -156,9 +209,12 @@ function startServers ()
         discServ.startWatchDiscServiceRetryList();
     }
     redisPub.createRedisPubClient(function() {
+        connectToMainServer();
         createJobsAtInit();
         doFeatureTaskInit();
+        process.send("INIT IS DONE");
     });
+}
 }
 
 function jobServerPurgeAndStart (redisClient, callback)
@@ -171,26 +227,50 @@ function jobServerPurgeAndStart (redisClient, callback)
     });
 }
 
-workerSock.on('message', function (msg) {
-    /* Now based on the message type, act */
-    processMsg(msg);
-});
+function messageHandler (msg)
+{
+    if ((null != msg) && (null != msg.cmd)) {
+        switch(msg.cmd) {
+        case global.MSG_CMD_KILLALL:
+            /* Kill the worker process and let master again fork it */
+            clusterUtils.killAllWorkers();
+            break;
+        }
+    }
+}
 
-function startJobServer () {
-jobsApi.jobListenerReadyQEvent.on('kueReady', function() {
-    /* Now start real server processing */
-    commonUtils.createRedisClient(function(client) {
-        jobServerPurgeAndStart(client, function() {
-            startServers();
+function startJobCluster ()
+{
+    if (cluster.isMaster) {
+        clusterMasterInit(function(err) {
+            clusterUtils.forkWorkers();
+            clusterUtils.addClusterEventListener(messageHandler);
         });
+    } else {
+        clusterWorkerInit(function(err) {
+            loadJobServer();
+        });
+    }
+}
+
+function clusterWorkerInit (callback)
+{
+    var purgeRedisClient = redisUtils.createRedisClient();
+    async.parallel([
+        function(CB) {
+            jobServerPurgeAndStart(purgeRedisClient, function() {
+                CB(null, null);
+            });
+        }
+    ],
+    function(error, results) {
+        callback();
     });
-});
 }
 
-startJobServer();
-
-exports.myIdentity = myIdentity;
-exports.discServEnable = discServEnable;
-exports.pkgList = pkgList;
+function clusterMasterInit(callback)
+{
+    callback();
 }
 
+startJobCluster();

@@ -63,7 +63,7 @@ function doNovaOpCb (reqUrl, apiProtoIP, tenantId, req, novaCallback, stopRetry,
             if (stopRetry) {
                 logutils.logger.debug("We are done retrying for tenantId:" +
                                       tenantId + " with err:" + err);
-                commonUtils.redirectToLogout(req, req.res);
+                commonUtils.handleAuthToAuthorizeError(err, req, callback);
             } else {
                 /* Retry once again */
                 logutils.logger.debug("We are about to retry for tenantId:" +
@@ -196,41 +196,48 @@ novaApi.delete = function (reqUrl, apiProtoIP, req, callback, stopRetry,
     });
 }
 
-var novaAPIVerList = ['v1.1', 'v2'];
+var novaAPIVerList = ['v1.1', 'v2', 'v2.1'];
 
 var getVMStatsByProjectCB = {
     'v1.1': getVMStatsByProjectV11,
-    'v2': getVMStatsByProjectV11
+    'v2': getVMStatsByProjectV11,
+    'v2.1': getVMStatsByProjectV11
 };
 
 var getServiceInstanceVMStatusCB = {
     'v1.1': getServiceInstanceVMStatusV11,
-    'v2': getServiceInstanceVMStatusV11
+    'v2': getServiceInstanceVMStatusV11,
+    'v2.1': getServiceInstanceVMStatusV11
 }
 
 var getFlavorsCB = {
     'v1.1': getFlavorsV11,
-    'v2': getFlavorsV11
+    'v2': getFlavorsV11,
+    'v2.1': getFlavorsV11
 };
 
 var launchVNCCB = {
     'v1.1' : launchVNCV11,
-    'v2': launchVNCV11
+    'v2': launchVNCV11,
+    'v2.1': launchVNCV11
 };
 
 var getOSHostListCB = {
     'v1.1': getOSHostV11,
-    'v2': getOSHostV11
+    'v2': getOSHostV11,
+    'v2.1': getOSHostV11
 };
 
 var availabilityZoneCB = {
     'v1.1': getAvailabilityZoneV11,
-    'v2': getAvailabilityZoneV11
+    'v2': getAvailabilityZoneV11,
+    'v2.1': getAvailabilityZoneV11
 };
 
 var portAttachSendRespCB = {
     'v1.1': portAttachSendRespV11,
-    'v2': portAttachSendRespV11
+    'v2': portAttachSendRespV11,
+    'v2.1': portAttachSendRespV11
 };
 
 function getOSHostV11 (err, data, callback){
@@ -308,7 +315,7 @@ function getVMStatsByProject (projUUID, req, callback)
         if ((null != err) || (null == data) || (null == data['tenant'])) {
             logutils.logger.error("Error in getting token object for tenant: " +
                                   tenantStr);
-            commonUtils.redirectToLogout(req, req.res);
+            commonUtils.handleAuthToAuthorizeError(err, req, callback);
             return;
         }
         var tenantId = data['tenant']['id'];
@@ -358,7 +365,7 @@ function getServiceInstanceVMStatus (req, vmRefs, callback)
         if ((null != err)  || (null == data) || (null == data['tenant'])) {
             logutils.logger.error("Error in getting token object for tenant: " +
                                   tenantStr);
-            commonUtils.redirectToLogout(req, req.res);
+            commonUtils.handleAuthToAuthorizeError(err, req, callback);
             return;
         }
         var tenantId = data['tenant']['id'];
@@ -432,7 +439,7 @@ function launchVNC (request, callback)
                                   " With session: " + request.session.id);
         }
         if ((null != error) || (null == data) || (null == data.tenant)) {
-            commonUtils.redirectToLogout(request, request.res);
+            commonUtils.handleAuthToAuthorizeError(error, request, callback);
             return;
         }
 
@@ -549,7 +556,7 @@ function getFlavors (req, callback)
                         function(err, data) {
         if ((null != err) || (null == data) || (null == data['tenant'])) {
             logutils.logger.error("Error in getting token object for tenant: " + tenantStr);
-            commonUtils.redirectToLogout(req, req.res);
+            commonUtils.handleAuthToAuthorizeError(err, req, callback);
             return;
         }
         var tenantId = data['tenant']['id'];
@@ -587,7 +594,7 @@ function getOSHostList(req, callback)
                          true}, function(err, data) {
         if ((null != err) || (null == data) || (null == data['tenant'])) {
             logutils.logger.error("Error in getting token object for tenant: " + tenantStr);
-            commonUtils.redirectToLogout(req, req.res);
+            commonUtils.handleAuthToAuthorizeError(err, req, callback);
             return;
         }
         var tenantId = data['tenant']['id'];
@@ -625,7 +632,7 @@ function getAvailabilityZoneList(req, callback)
                          true}, function(err, data) {
         if ((null != err) || (null == data) || (null == data['tenant'])) {
             logutils.logger.error("Error in getting token object for tenant: " + tenantStr);
-            commonUtils.redirectToLogout(req, req.res);
+            commonUtils.handleAuthToAuthorizeError(err, req, callback);
             return;
         }
         var tenantId = data['tenant']['id'];
@@ -702,7 +709,7 @@ function portAttach (req, body, callback)
                          true}, function(err, data) {
         if ((null != err) || (null == data) || (null == data['tenant'])) {
             logutils.logger.error("Error in getting token object for tenant: " + tenantStr);
-            commonUtils.redirectToLogout(req, req.res);
+            commonUtils.handleAuthToAuthorizeError(err, req, callback);
             return;
         }
         var tenantId = data['tenant']['id'];
@@ -729,7 +736,7 @@ function portAttach (req, body, callback)
                 var reqUrl = '/' + ver['version'] + reqUrlPrefix;
                 novaApi.post(reqUrl, novaPostData, ver, req,
                              function(error, data) {
-                    portAttachSendResp(err, data, ver['version'], callback);
+                    portAttachSendResp(error, data, ver['version'], callback);
                 }, false, appHeaders);
             });
         });
@@ -754,7 +761,7 @@ function portDetach (req, portID, vmUUID, callback)
                          true}, function(err, data) {
         if ((null != err) || (null == data) || (null == data['tenant'])) {
             logutils.logger.error("Error in getting token object for tenant: " + tenantStr);
-            commonUtils.redirectToLogout(req, req.res);
+            commonUtils.handleAuthToAuthorizeError(err, req, callback);
             return;
         }
         var tenantId = data['tenant']['id'];

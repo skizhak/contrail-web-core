@@ -117,8 +117,8 @@ function processPendingReq (ctx, next, callback)
   //If loggedInOrchestrationMode doesn't exist in session
   if (checkLoginReq(ctx.req)) {
     ctx.req.session.loggedInOrchestrationMode =
-        orch.getOrchestrationModelsByReqURL(ctx.req.url);
-    logutils.logger.debug("Getting Logged In Orchestration Mode:",
+        orch.getOrchestrationModelsByReqURL(ctx.req.url, ctx.req);
+    logutils.logger.info("Getting Logged In Orchestration Mode:",
                           ctx.req.session.loggedInOrchestrationMode);
   }
 
@@ -157,9 +157,18 @@ function registerRestrictedURL ()
  */
 function checkLoginReq (req)
 {
-  return ((req.url == '/login') || (req.url == '/authenticate') || (req.url == '/vcenter/authenticate') ||
-          (req.url == '/logout') || (req.url == '/vcenter/login') ||
-          (req.url == '/vcenter/logout'));
+  //Now,as authenticate request is issued via Ajax call and we get the _ argument to avoid cache and need to match url only with the beginning
+  return req.url.match(/^((\/isauthenticated)|(\/vcenter\/menu)|(\/menu)|(\/authenticate)|(\/vcenter\/authenticate)|(\/vcenter\/isauthenticated)|(\/logout)|(\/vcenter\/login)|(\/vcenter\/logout)|(\/login)|(\/vcenter))/);
+}
+
+/*
+ * Check if URL is agnostic to orchestration 
+ * If URL is not agnostic to orchestration, then we logout if the requestedURL doesn't match with 
+ * loggedInOrchestrationMode on server
+ */
+function checkOrchestrationAgnosticReq(req) 
+{
+    return req.url.indexOf('/proxy') == 0 || req.url.indexOf('/api') == 0;
 }
 
 /* Function: routeAll
@@ -173,7 +182,7 @@ function routeAll (req, res, next)
   req.socket.setTimeout(global.NODEJS_HTTP_REQUEST_TIMEOUT_TIME);
   if (checkLoginReq(req)) {
     req.session.loggedInOrchestrationMode =
-        orch.getOrchestrationModelsByReqURL(req.url);
+        orch.getOrchestrationModelsByReqURL(req.url, req);
   }
   if (null == req.session.sessionExpSyncToIdentityToken) {
       if (null != authApi.getSessionExpiryTime) {
@@ -323,3 +332,4 @@ exports.routeAll = routeAll;
 exports.processPendingReq = processPendingReq;
 exports.insertDataToSendAllClients = insertDataToSendAllClients;
 exports.checkLoginReq = checkLoginReq;
+exports.checkOrchestrationAgnosticReq = checkOrchestrationAgnosticReq;

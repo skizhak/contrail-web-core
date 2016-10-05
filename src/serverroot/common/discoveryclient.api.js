@@ -8,6 +8,7 @@ var global = require('./global'),
     logutils = require('../utils/log.utils');
 
 var serviceRespData = {};
+var webuiIP = null;
 
 function checkIfServiceRespDataExists (service, data)
 {
@@ -92,11 +93,17 @@ function getDiscServiceByApiServerType (apiServerType)
 
     switch (apiServerType) {
     case global.label.OPS_API_SERVER:
+    case global.label.OPSERVER:
         serviceType = global.DISC_SERVICE_TYPE_OP_SERVER;
         break;
 
     case global.label.VNCONFIG_API_SERVER:
+    case global.label.API_SERVER:
         serviceType = global.DISC_SERVICE_TYPE_API_SERVER;
+        break;
+
+    case global.label.DNS_SERVER:
+        serviceType = global.DISC_SERVICE_TYPE_DNS_SERVER;
         break;
 
     default:
@@ -127,6 +134,8 @@ function getServerTypeByServerName (serverName)
     case global.label.OPS_API_SERVER:
     case global.label.VNCONFIG_API_SERVER:
         return global.DISC_SERVICE_TYPE_API_SERVER;
+    case global.label.DNS_SERVER:
+        return global.DISC_SERVICE_TYPE_DNS_SERVER;
     default:
         return null;
     }
@@ -213,6 +222,23 @@ function resetServicesByParams (params, apiName)
     return params;
 }
 
+function getDiscServiceRespDataList (req, res, appData)
+{
+    commonUtils.handleJSONResponse(null, res, getServiceRespDataList());
+}
+
+function setWebUINodeIP (ip)
+{
+    if (null != ip) {
+        webuiIP = ip;
+    }
+}
+
+function getWebUINodeIP (ip)
+{
+    return webuiIP;
+}
+
 exports.resetServicesByParams = resetServicesByParams;
 exports.storeServiceRespData = storeServiceRespData;
 exports.getServiceRespDataList = getServiceRespDataList;
@@ -221,4 +247,7 @@ exports.getDiscServiceByServiceType = getDiscServiceByServiceType;
 exports.processDiscoveryServiceResponseMsg = processDiscoveryServiceResponseMsg;
 exports.sendWebServerReadyMessage = sendWebServerReadyMessage;
 exports.sendDiscSubMessageOnDemand = sendDiscSubMessageOnDemand;
+exports.getDiscServiceRespDataList = getDiscServiceRespDataList;
+exports.setWebUINodeIP = setWebUINodeIP;
+exports.getWebUINodeIP = getWebUINodeIP;
 

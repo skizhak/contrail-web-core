@@ -3,6 +3,7 @@
  */
 
 var http = require('http'),
+    https = require('https'),
 	config = process.mainModule.exports.config,
 	logutils = require('../utils/log.utils'),
 	messages = require('./messages'),
@@ -31,6 +32,7 @@ function APIServer(params)
 	self.hostname = params.server;
 	self.port = params.port;
 	self.xml2jsSettings = params.xml2jsSettings || {};
+	self.isRawData = (null != params.isRawData) ? params.isRawData : false;
 	self.api = new self.API(self, params.apiName);
 }
 
@@ -103,13 +105,23 @@ APIServer.prototype.cb = function (cb)
  */
 APIServer.prototype.updateDiscoveryServiceParams = function (params)
 {
-    var opS = require('./opServer.api');
-    var configS = require('./configServer.api');
     var server = null;
     var self = this;
     var apiServerType = self.name;
     var discService = null;
 
+    if (false == config.serviceEndPointFromConfig) {
+        /* Do not update through Discovery */
+        switch(apiServerType) {
+        case global.label.VNCONFIG_API_SERVER:
+        case global.label.OPS_API_SERVER:
+        case global.label.API_SERVER:
+        case global.label.OPSERVER:
+            return params;
+        default:
+            break;
+        }
+    }
     discService = discClient.getDiscServiceByApiServerType(apiServerType);
     if (discService) {
         /* We are sending only the first IP */
@@ -132,9 +144,31 @@ APIServer.prototype.updateDiscoveryServiceParams = function (params)
 
 APIServer.prototype.makeHttpsRestCall = function (options, callback)
 {
-    request(options, function(err, response, data) {
-        callback(err, data, response);
+    var method = options['method'];
+    var req = https.request(options, function (res) {
+        var result = '';
+        res.on('data', function (chunk) {
+            result += chunk;
+        });
+        res.on('end', function () {
+            callback(null, result, res);
+        });
+        res.on('error', function (err) {
+            callback(err);
+        })
     });
+
+    // req error
+    req.on('error', function (err) {
+        logutils.logger.error(err.stack);
+        callback(err);
+    });
+
+    //send request with the postData form
+    if (('POST' == method) || ('PUT' == method)) {
+        req.write(options['data']);
+    }
+    req.end();
 }
 
 /** Retry the REST API Call, once it fails
@@ -150,12 +184,12 @@ APIServer.prototype.retryMakeCall = function(err, restApi, params,
                                              response, callback, isRetry)
 {
     var self = this;
-    /* Check if the error code is ECONNREFUSED or ETIMEOUT, if yes then
+    /* Check if the error code is ECONNREFUSED or ETIMEDOUT, if yes then
      * issue once again discovery subscribe request, the remote server
      * may be down, so discovery server should send the Up Servers now
      */
     if ((true == process.mainModule.exports['discServEnable']) &&
-        (('ECONNREFUSED' == err.code) || ('ETIMEOUT' == err.code))) {
+        (('ECONNREFUSED' == err.code) || ('ETIMEDOUT' == err.code))) {
         if (false == isRetry) {
             /* Only one time send a retry */
             discClient.sendDiscSubMessageOnDemand(self.name);
@@ -186,6 +220,10 @@ APIServer.prototype.retryMakeCall = function(err, restApi, params,
 APIServer.prototype.sendParsedDataToApp = function(data, xml2jsSettings, 
                                                    response, callback)
 {
+    if (true == this.isRawData) {
+        callback(null, data, response);
+        return;
+    }
     /* Data is xml/json format */
     restler.parsers.xml(data, function(err, xml2JsonData) {
         if (err) {
@@ -217,11 +255,10 @@ APIServer.prototype.makeCall = function (restApi, params, callback, isRetry)
     var self = this;
     var reqUrl = null;
     var options = {};
-    var data = commonUtils.getApiPostData(params['path'], params['data']);
     var method = params['method'];
     var xml2jsSettings = params['xml2jsSettings'];     
+    var data = commonUtils.getApiPostData(params['path'], params['data']);
     options['headers'] = params['headers'] || {};
-    options['data'] = data || {};
     options['method'] = method;
     options['headers']['Content-Length'] = (data) ? data.toString().length : 0;
     
@@ -230,25 +267,35 @@ APIServer.prototype.makeCall = function (restApi, params, callback, isRetry)
            we need to specify the Content-Type as App/JSON with JSON.stringify
            of the data, otherwise, restler treats it as
            application/x-www-form-urlencoded as Content-Type and encodes
-           the data accordingly
+           the data accordingly. Restler also changes Content-Type when
+           an empty data object is passed for GET queries, so make sure
+           we are don't pass it.
          */
+        options['data'] = data || {};
         options['headers']['Content-Type'] = 'application/json';
     }
     params = self.updateDiscoveryServiceParams(params);
-    options['parser'] = restler.parsers.auto;
     options = httpsOp.updateHttpsSecureOptions(self.name, options);
     if ((null != options['headers']) &&
         (null != options['headers']['protocol']) &&
         (global.PROTOCOL_HTTPS == options['headers']['protocol'])) {
         delete options['headers']['protocol'];
         reqUrl = global.HTTPS_URL + params.url + ':' + params.port + params.path;
-        options['uri'] = reqUrl;
         options['body'] = options['data'];
         if (('POST' != method) && ('PUT' != method)) {
             delete options['data'];
             delete options['body'];
         }
+        options['hostname'] = params.url;
+        options['port'] = params.port;
+        options['path'] = params.path;
+
         self.makeHttpsRestCall(options, function(err, data, response) {
+            var localIp =
+                commonUtils.getValueByJsonPath(response,
+                                               'connection;localAddress',
+                                               null, false);
+            discClient.setWebUINodeIP(localIp);
             if (null != err) {
                 try {
                     logutils.logger.error('URL [' + reqUrl + ']' + 
@@ -267,7 +314,16 @@ APIServer.prototype.makeCall = function (restApi, params, callback, isRetry)
         return;
     }
     reqUrl = global.HTTP_URL + params.url + ':' + params.port + params.path;
+    if (null != options['headers']) {
+        delete options['headers']['protocol'];
+        delete options['headers']['noRedirectToLogout'];
+    }
     restApi(reqUrl, options).on('complete', function(data, response) {
+        var localIp =
+            commonUtils.getValueByJsonPath(response,
+                                           'connection;localAddress',
+                                           null, false);
+        discClient.setWebUINodeIP(localIp);
         if (data instanceof Error ||
             parseInt(response.statusCode) >= 400) {
             try {

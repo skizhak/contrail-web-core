@@ -70,9 +70,8 @@ function doAuthenticate (req, res, appData, callback) {
 function getTokenObj (authObj, callback)
 {
     var req = authObj.req 
-    getAuthMethod[req.session.loggedInOrchestrationMode].getToken(authObj, function(err, data) { 
-        callback(err, data);
-    });
+    getAuthMethod[req.session.loggedInOrchestrationMode].getToken(authObj,
+                                                                  callback);
 }
 
 function getTenantList (req, appData, callback)
@@ -92,6 +91,13 @@ function getProjectList (req, appData, callback)
 function getDomainList (req, callback)
 {
     getAuthMethod[req.session.loggedInOrchestrationMode].getDomainList(req, function(err, data) {
+        callback(err, data);
+    });
+}
+
+function getRoleList (req, callback)
+{
+    getAuthMethod[req.session.loggedInOrchestrationMode].getRoleList(req, function(err, data) {
         callback(err, data);
     });
 }
@@ -139,9 +145,22 @@ function getServiceCatalog (req, callback)
     });
 }
 
+function getUIUserRoleByTenant (userObj, callback)
+{
+    var req = userObj['req'];
+    return getAuthMethod[req.session.loggedInOrchestrationMode].getUIUserRoleByTenant(userObj,
+                                                                                      callback);
+}
+
 function getUIRolesByExtRoles (req, extRoles)
 {
-    return getAuthMethod[req.session.loggedInOrchestrationMode].getUserRoleByAuthResponse(extRoles);
+    return getAuthMethod[req.session.loggedInOrchestrationMode].getUIRolesByExtRoles(extRoles);
+}
+
+function getExtUserRoleByTenant (userObj, callback)
+{
+    var req = userObj['req'];
+    return getAuthMethod[req.session.loggedInOrchestrationMode].getExtUserRoleByTenant(userObj, callback);
 }
 
 function getCookieObjs (req, appData, callback)
@@ -166,6 +185,151 @@ function getUserAuthDataByConfigAuthObj (loggedInOrchestrationMode, authObj, cal
                                                                             callback);
 }
 
+function deleteAllTokens (req, callback)
+{
+    if ((null != req.session) && 
+        (null != req.session.loggedInOrchestrationMode)) {
+        getAuthMethod[req.session.loggedInOrchestrationMode].deleteAllTokens(req,
+                                                                         callback);
+    } else {
+        callback(null, null);
+    }
+}
+
+function getDomainNameByUUID (request, uuid, domList)
+{
+    return getAuthMethod[request.session.loggedInOrchestrationMode].getDomainNameByUUID(request,
+                                                                             uuid,
+                                                                             domList);
+}
+
+function getServiceAPIVersionByReqObj (request, svcType, callback, reqBy)
+{
+    var orchMode = request.session.loggedInOrchestrationMode;
+    return getAuthMethod[orchMode].getServiceAPIVersionByReqObj(request,
+                                                                svcType,
+                                                                callback, reqBy);
+}
+
+function getAdminProjectList (req)
+{
+    var adminProjectList = [];
+    var adminRoleProjects = config.roleMaps['cloudAdmin'];
+    var adminRoleProjectsInUpper = adminRoleProjects.map(function(x) {
+        return x.toUpperCase();
+    });
+    var memberRoleProjects = config.roleMaps['member'];
+    var memberRoleProjectsInUpper = memberRoleProjects.map(function(x) {
+        return x.toUpperCase();
+    });
+    var adminRoleProjectsCnt = adminRoleProjects.length;
+    var userRoles = req.session.userRoles;
+    if (-1 != adminRoleProjectsInUpper.indexOf(global.STR_ROLE_WILDCARD)) {
+        /* If any role not matching with member role, treat it as admin role
+         * project
+         */
+        for (var key in userRoles) {
+            var roles = userRoles[key];
+            var rolesCnt = roles.length;
+            for (var i = 0; i < rolesCnt; i++) {
+                var userRole = roles[i].toUpperCase();
+                if (-1 != adminRoleProjectsInUpper.indexOf(userRole)) {
+                    adminProjectList.push(key);
+                    continue;
+                }
+                if (-1 == memberRoleProjectsInUpper.indexOf(userRole)) {
+                    adminProjectList.push(key);
+                    continue;
+                }
+            }
+        }
+        return adminProjectList;
+    }
+    for (var key in userRoles) {
+        var roles = userRoles[key];
+        if (null == roles) {
+            logutils.logger.error('req.session.userRoles null for project:' +
+                                  ' ' + key);
+            continue;
+        }
+        var rolesCnt = roles.length;
+        for (var i = 0; i < rolesCnt; i++) {
+            var userRole = roles[i].toUpperCase();
+            if (-1 != adminRoleProjectsInUpper.indexOf(userRole)) {
+                adminProjectList.push(key);
+            }
+        }
+    }
+    return adminProjectList;
+}
+
+function getEndpointServiceType (type)
+{
+    var svcType = null;
+    switch (type) {
+    case 'OpServer':
+        svcType =
+            commonUtils.getValueByJsonPath(config,
+                                           'endpoints;opServiceType',
+                                           'OpServer');
+        break;
+    case 'ApiServer':
+        svcType =
+            commonUtils.getValueByJsonPath(config,
+                                           'endpoints;apiServiceType',
+                                           'ApiServer');
+        break;
+    default:
+        break;
+    }
+    return svcType;
+}
+
+function isRegionListFromConfig ()
+{
+    return ((false == config.serviceEndPointFromConfig) &&
+            (true == config.regionsFromConfig));
+}
+
+function isRegionListFromIdentity ()
+{
+    return ((false == config.serviceEndPointFromConfig) &&
+            (false == config.regionsFromConfig));
+}
+
+function isMultiRegionSupported ()
+{
+    return isRegionListFromConfig() || isRegionListFromIdentity();
+}
+
+function getRegionList (req, res, appData)
+{
+    commonUtils.handleJSONResponse(null, res, req.session.regionList);
+}
+
+function getCurrentRegion (req)
+{
+    var sessionRegion =
+        commonUtils.getValueByJsonPath(req, 'session;regionname', null, false);
+    return commonUtils.getValueByJsonPath(req, 'cookies;region', sessionRegion,
+                                          false);
+}
+
+function shiftServiceEndpointList (req, serviceType, regionName)
+{
+    var orchMode = req.session.loggedInOrchestrationMode;
+    return getAuthMethod[orchMode].shiftServiceEndpointList(req,
+                                                            serviceType,
+                                                            regionName);
+}
+
+function getAuthRetryData (token, req, reqUrl, callback)
+{
+    var orchMode = req.session.loggedInOrchestrationMode;
+    return getAuthMethod[orchMode].getAuthRetryData(token, req, reqUrl,
+                                                    callback);
+}
+
 exports.doAuthenticate = doAuthenticate;
 exports.getTenantList = getTenantList;
 exports.getTokenObj = getTokenObj;
@@ -178,9 +342,24 @@ exports.getDomainList = getDomainList;
 exports.getProjectList = getProjectList;
 exports.isDefaultDomain = isDefaultDomain;
 exports.getNewTokenObjByToken = getNewTokenObjByToken;
-exports.getUIRolesByExtRoles = getUIRolesByExtRoles;
 exports.getDefaultDomain = getDefaultDomain;
 exports.getCookieObjs = getCookieObjs;
 exports.getSessionExpiryTime = getSessionExpiryTime;
 exports.getUserAuthDataByConfigAuthObj = getUserAuthDataByConfigAuthObj;
+exports.deleteAllTokens = deleteAllTokens;
+exports.getExtUserRoleByTenant = getExtUserRoleByTenant;
+exports.getDomainNameByUUID = getDomainNameByUUID;
+exports.getUIUserRoleByTenant = getUIUserRoleByTenant;
+exports.getUIRolesByExtRoles = getUIRolesByExtRoles;
+exports.getAdminProjectList = getAdminProjectList;
+exports.getServiceAPIVersionByReqObj = getServiceAPIVersionByReqObj;
+exports.getEndpointServiceType = getEndpointServiceType;
+exports.isRegionListFromConfig = isRegionListFromConfig;
+exports.isRegionListFromIdentity = isRegionListFromIdentity;
+exports.isMultiRegionSupported = isMultiRegionSupported;
+exports.getRegionList = getRegionList;
+exports.getCurrentRegion = getCurrentRegion;
+exports.shiftServiceEndpointList = shiftServiceEndpointList;
+exports.getRoleList = getRoleList;
+exports.getAuthRetryData = getAuthRetryData;
 

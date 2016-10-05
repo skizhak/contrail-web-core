@@ -4,7 +4,7 @@
 
 function infraMonitorClass() {
     var self = this;
-    var viewModels=[]; 
+    var viewModels=[];
     var dashboardConfig = [];
     var tabs = [];
     //Show down node count only if it's > 0
@@ -22,7 +22,7 @@ function infraMonitorClass() {
     this.getDashboardDataObj = function(){
         return dashboardViewModel;
     }
-    /*End of Selenium Testing*/    
+    /*End of Selenium Testing*/
 
     this.destroy = function () {
         //Cancel the pending ajax calls
@@ -34,7 +34,7 @@ function infraMonitorClass() {
     this.updateViewByHash = function (hashObj, lastHashObj) {
         self.load({hashParams:hashObj});
     }
-    
+
     this.updateInfoBoxes = function() {
          var infoListTemplate = contrail.getTemplate4Id("infoList-template"),dashboardDataArr = [];;
          $.each(viewModels,function(idx,currViewModel) {
@@ -45,7 +45,13 @@ function infraMonitorClass() {
          var verDimension = dashboardCF.dimension(function(d) { return d.version });
          var verGroup = verDimension.group();
          var verArr = [];
-         var systemCnt = nameDimension.group().all().length;
+         var systemCnt = 0;
+         var systemList = [];
+         for(var i=0;i<dashboardDataArr.length;i++) {
+            if(dashboardDataArr[i]['vRouterType'] == null || dashboardDataArr[i]['vRouterType'] != 'tor-agent')
+                systemList.push(dashboardDataArr[i]['name']);
+         }
+         systemCnt = systemList.unique().length;
          var infoData = [{lbl:'No. of servers',value:systemCnt}];
          infoData.push({lbl:'No. of logical nodes', value:dashboardDataArr.length});
          //Distinct Versions
@@ -66,7 +72,7 @@ function infraMonitorClass() {
          $('#system-info-stat').html(infoListTemplate(infoData));
          endWidgetLoading('sysinfo');
     }
-    
+
     this.updateAlerts = function(){
         var alertTemplate=contrail.getTemplate4Id("alerts-template");
         var alerts_nodes=[];
@@ -75,7 +81,7 @@ function infraMonitorClass() {
         var allAlerts = nodeAlerts.concat(processAlerts);
         allAlerts.sort(dashboardUtils.sortInfraAlerts);
         if(globalAlerts.length > 0)
-            allAlerts = allAlerts.concat(globalAlerts)
+            allAlerts = allAlerts.concat($.extend(true,[],globalAlerts));
         //Filtering the alerts for alerts popup based on the detailAlert flag
         var popupAlerts = [];
         for(var i=0;i<allAlerts.length;i++) {
@@ -113,7 +119,7 @@ function infraMonitorClass() {
             loadAlertsContent();
         });
     }
-    
+
     this.addInfoBox = function(infoBoxObj) {
         //If dashboard is not already loaded,load it
         if($('.infobox-container').length == 0)
@@ -123,7 +129,7 @@ function infraMonitorClass() {
         var infoBoxTemplate  = contrail.getTemplate4Id('infobox-template');
         var obj = infoBoxObj;
         $('#topStats').append(infoBoxTemplate({title:obj['title'],totalCntField:'totalCnt',
-            activeCntField:'upCnt',inactiveCntField:'downCnt'})); 
+            activeCntField:'upCnt',inactiveCntField:'downCnt'}));
         var tabContentTemplate = contrail.getTemplate4Id(obj['template']);
         $('#dashboard-charts').append($('<div>').addClass('dashboard-chart-item').addClass('row-fluid').addClass('hide').html(tabContentTemplate));
         ko.applyBindings(obj['viewModel'],$('#topStats').children(':last')[0]);
@@ -132,6 +138,13 @@ function infraMonitorClass() {
         var result = nodeDS.getDataSourceObj();
         var dataSource = result['dataSource'];
         var deferredObj = result['deferredObj'];
+      //if cached data is available trigger event to update
+        if(result['lastUpdated'] != null && (result['error'] == null || result['error']['errTxt'] == 'abort')){
+            triggerDatasourceEvents(nodeDS);
+        }
+        infoBoxObj['viewModel'].downCnt.subscribe(function(newValue) {
+            showHideDownNodeCnt();
+        });
         //Update the viewModel
         $(nodeDS).on('change',function() {
             var data = dataSource.getItems();
@@ -139,40 +152,39 @@ function infraMonitorClass() {
             self.updateInfoBoxes();
             self.updateAlerts();
         });
-        //if cached data is available trigger event to update
-        if(result['lastUpdated'] != null && (result['error'] == null || result['error']['errTxt'] == 'abort')){
-            triggerDatasourceEvents(nodeDS);
-        }
-        infoBoxObj['viewModel'].downCnt.subscribe(function(newValue) {
-            showHideDownNodeCnt();
-        });
+
     }
 
     function loadLogs() {
         function getLogs(deferredObj) {
             var retArr = [];
             $.ajax({
-                url: monitorInfraUrls['QUERY'] + '?where=&filters=&level=4&fromTimeUTC=now-10m' + 
+                url: monitorInfraUrls['QUERY'] + '?where=&filters=&level=4&fromTimeUTC=now-10m' +
                     '&toTimeUTC=now&table=MessageTable&limit=10'
             }).done(function(result) {
-                retArr = $.map(result['data'],function(obj,idx) {
-                    obj['message'] = formatXML2JSON(obj['Xmlmessage']);
-                    obj['timeStr'] = diffDates(new XDate(obj['MessageTS']/1000),new XDate());
-                    if(obj['Source'] == null)
-                        obj['moduleId'] = contrail.format('{0}',obj['ModuleId']);
-                    else
-                        obj['moduleId'] = contrail.format('{0} ({1})',obj['ModuleId'],obj['Source']);
-                    if($.inArray(obj['ModuleId'],[UVEModuleIds['DISCOVERY_SERVICE'],UVEModuleIds['SERVICE_MONITOR'],UVEModuleIds['SCHEMA'],UVEModuleIds['CONFIG_NODE']]) != -1)
-                        obj['link'] = {p:'mon_infra_config',q:{node:obj['Source'],tab:''}};
-                    else if($.inArray(obj['ModuleId'],[UVEModuleIds['COLLECTOR'],UVEModuleIds['OPSERVER'],UVEModuleIds['QUERYENGINE']],obj['ModuleId']) != -1)
-                        obj['link'] = {p:'mon_infra_analytics',q:{node:obj['Source'],tab:''}};
-                    else if($.inArray(obj['ModuleId'],[UVEModuleIds['VROUTER_AGENT']]) != -1)
-                        obj['link'] = {p:'mon_infra_vrouter',q:{node:obj['Source'],tab:''}};
-                    else if($.inArray(obj['ModuleId'],[UVEModuleIds['CONTROLNODE']]) != -1)
-                        obj['link'] = {p:'mon_infra_control',q:{node:obj['Source'],tab:''}};
-                    return obj;
+                //Todo Move the loadLogs to appropriate location
+                //qe utils object no more in global scope.
+                require(['core-basedir/reports/qe/ui/js/common/qe.utils'], function(qeUtils) {
+                    retArr = $.map(result['data'],function(obj,idx) {
+                        obj['message'] = qeUtils.formatXML2JSON(obj['Xmlmessage']);
+                        obj['timeStr'] = diffDates(new XDate(obj['MessageTS']/1000),new XDate());
+                        if(obj['Source'] == null)
+                            obj['moduleId'] = contrail.format('{0}',obj['ModuleId']);
+                        else
+                            obj['moduleId'] = contrail.format('{0} ({1})',obj['ModuleId'],obj['Source']);
+                        if($.inArray(obj['ModuleId'],[UVEModuleIds['DISCOVERY_SERVICE'],UVEModuleIds['SERVICE_MONITOR'],UVEModuleIds['SCHEMA'],UVEModuleIds['CONFIG_NODE']]) != -1)
+                            obj['link'] = {p:'mon_infra_config',q:{node:obj['Source'],tab:''}};
+                        else if($.inArray(obj['ModuleId'],[UVEModuleIds['COLLECTOR'],UVEModuleIds['OPSERVER'],UVEModuleIds['QUERYENGINE']],obj['ModuleId']) != -1)
+                            obj['link'] = {p:'mon_infra_analytics',q:{node:obj['Source'],tab:''}};
+                        else if($.inArray(obj['ModuleId'],[UVEModuleIds['VROUTER_AGENT']]) != -1)
+                            obj['link'] = {p:'mon_infra_vrouter',q:{node:obj['Source'],tab:''}};
+                        else if($.inArray(obj['ModuleId'],[UVEModuleIds['CONTROLNODE']]) != -1)
+                            obj['link'] = {p:'mon_infra_control',q:{node:obj['Source'],tab:''}};
+                        return obj;
+                    });
+                    deferredObj.resolve(retArr);
                 });
-                deferredObj.resolve(retArr);
+
             }).fail(function(result) {
                 deferredObj.resolve(retArr);
             });
@@ -205,9 +217,8 @@ function infraMonitorClass() {
             $(currTabContainer).show();
             //Trigger refresh on svg charts
             $(currTabContainer).find('svg').trigger('refresh');
-            if($(currTabContainer).find('svg').length > 0){
-                $(currTabContainer).find('svg').resize();
-            }
+            //Only the window object fires "resize" event
+            $(window).resize();
         });
 
         //When all node details are fetched,upedate alerts & info boxes
@@ -228,7 +239,7 @@ function infraMonitorClass() {
                 alertsList = alertsList.concat(obj['processAlerts']);
             });
         });
-        return alertsList;
+        return $.extend(true,[],alertsList);
     }
 
     //Construct Node-specific Alerts looping through all nodes
@@ -239,7 +250,7 @@ function infraMonitorClass() {
                 alertsList = alertsList.concat(obj['nodeAlerts']);
             });
         });
-        return alertsList;
+        return $.extend(true,[],alertsList);
     }
 
     this.load = function (obj) {
@@ -281,7 +292,7 @@ var infraDashboardView = new infraMonitorClass();
  */
 function getNodeStatusForSummaryPages(data,page) {
     var result = {},msgs = [],tooltipAlerts = [];
-    for(var i = 0;i < data['alerts'].length; i++) {
+    for(var i = 0;i < ifNull(data['alerts'],[]).length; i++) {
         if(data['alerts'][i]['tooltipAlert'] != false) {
             tooltipAlerts.push(data['alerts'][i]);
             msgs.push(data['alerts'][i]['msg']);
@@ -292,29 +303,27 @@ function getNodeStatusForSummaryPages(data,page) {
         msgs.push(data['status']);
         tooltipAlerts.push({msg:data['status'],sevLevel:sevLevels['INFO']});
     } else if(ifNull(data['status'],"").indexOf('Down') > -1) {
-        //Need to discuss and add the down status 
+        //Need to discuss and add the down status
         //msgs.push(data['status']);
         //tooltipAlerts.push({msg:data['status'],sevLevel:sevLevels['ERROR']})
     }
     result['alerts'] = tooltipAlerts;
     result['nodeSeverity'] = data['alerts'][0] != null ? data['alerts'][0]['sevLevel'] : sevLevels['INFO'];
     result['messages'] = msgs;
-     var statusTemplate = contrail.getTemplate4Id('statusTemplate');
-    if(page == 'summary') 
-        return statusTemplate({sevLevel:result['nodeSeverity'],sevLevels:sevLevels});
     return result;
 }
 
 var dashboardUtils = {
     sortNodesByColor: function(a,b) {
-        var colorPriorities = [d3Colors['green'],d3Colors['blue'],d3Colors['orange'],d3Colors['red']];
-        var aColor = $.inArray(a['color'],colorPriorities); 
+        // var colorPriorities = [d3Colors['green'],d3Colors['blue'],d3Colors['orange'],d3Colors['red']];
+        var colorPriorities = [d3Colors['blue'],d3Colors['green'],d3Colors['orange'],d3Colors['red']];
+        var aColor = $.inArray(a['color'],colorPriorities);
         var bColor = $.inArray(b['color'],colorPriorities);
         return aColor-bColor;
     },
     getDownNodeCnt : function(data) {
         var downNodes = $.grep(data,function(obj,idx) {
-                           return obj['color'] == d3Colors['red']; 
+                           return obj['color'] == cowc.COLOR_SEVERITY_MAP['red'];
                         });
         return downNodes.length;
     },

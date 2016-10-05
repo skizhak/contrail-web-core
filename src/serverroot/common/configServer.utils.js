@@ -7,6 +7,7 @@ var config = process.mainModule.exports.config;
 var commonUtils = require('../utils/common.utils');
 var async = require('async');
 var configApiServer = require('./configServer.api');
+var logutils = require('./../utils/log.utils');
 
 /**
  * @listProjectsAPIServer
@@ -40,34 +41,29 @@ function getProjectsFromApiServer (request, appData, callback)
 
     var domain = request.param('domain');
     if ((null != domain) && (0 != domain.length)) {
-        reqURL = '/domain/' + domain;
+        reqURL = '/projects?parent_fq_name_str=' + domain +
+            '&parent_type=domain';
     } else {
         reqURL = '/projects';
     }
     configApiServer.apiGet(reqURL, appData, function(err, data) {
-        if ((null != err) || (null == data) || ((null != domain) &&
-            (0 != domain.length) && ((null == data['domain']) ||
-                                     (null == data['domain']['projects'])))) {
+        if ((null != err) || (null == data) ||
+            (null == data['projects'])) {
             callback(err, projectList);
             return;
         }
-        if ((null == domain) || (0 == domain.length)) {
-            callback(err, data);
-            return;
-        }
-        var list = data['domain']['projects'];
-        var projCnt = list.length;
-        for (var i = 0; i < projCnt; i++) {
-            projectList['projects'][i] = {};
-            projectList['projects'][i]['uuid'] = list[i]['uuid'];
-            projectList['projects'][i]['fq_name'] = list[i]['to'];
-        }
-        callback(null, projectList);
+        callback(null, data);
     });
 }
 
 function getDomainsFromApiServer (appData, callback)
 {
+    var headers = {'noRedirectToLogout': true}
+    /* This request is for login itself, it may happen we did not find the
+     * region in cookie, or invalid cookie, so by default API Server plugin in
+     * this scenario, redirects to logout page, but we should not do redirect in
+     * this case
+     */
     var domainsURL = '/domains';
     configApiServer.apiGet(domainsURL, appData, function(error, data) {
         if ((null != error) || (null == data)) {
@@ -75,7 +71,7 @@ function getDomainsFromApiServer (appData, callback)
         } else {
             callback(error, data);
         }
-    });
+    }, headers);
 }
 
 function getTenantListAndSyncDomain (request, appData, callback)
@@ -96,21 +92,14 @@ function getTenantListAndSyncDomain (request, appData, callback)
             if ((null != domId) && (false == authApi.isDefaultDomain(request, domId))) {
                 domId =
                     commonUtils.convertUUIDToString(tenantList['tenants'][i]['domain_id']);
-                if ((null != domain) && (domId != domain)) {
-                    tenantList['tenants'].splice(i, 1);
-                    i--;
-                    projCnt--;
-                    continue;
-                }
-            }
-            if ((null != domId) && (null == tmpDomainObjs[domId])) {
-                domainObjs['domains'].push({'fq_name': [domId], 'uuid': domId});
-                tmpDomainObjs[domId] = domId;
-                if (false == authApi.isDefaultDomain(request, domId)) {
-                    var domUrl = '/domain/' + domId;
-                    commonUtils.createReqObj(domArr, domUrl,
-                                             global.HTTP_REQUEST_GET, null,
-                                             null, null, appData);
+                if (null == tmpDomainObjs[domId]) {
+                    tmpDomainObjs[domId] = domId;
+                    if (false == authApi.isDefaultDomain(request, domId)) {
+                        var domUrl = '/domain/' + domId;
+                        commonUtils.createReqObj(domArr, domUrl,
+                                                 global.HTTP_REQUEST_GET, null,
+                                                 null, null, appData);
+                    }
                 }
             }
         }
@@ -120,8 +109,49 @@ function getTenantListAndSyncDomain (request, appData, callback)
                   function(err, confData) {
             getDomainsFromApiServer(appData, function(err, domList) {
                 if ((null != err) || (null == domList) || (null == domList['domains'])) {
+                    /* We did not find any domain in API Server */
+                    if ('v3' == request.session.authApiVersion) {
+                        /* In v2, we have default-domain for all projects */
+                        tenantList['tenants'] = [];
+                    }
                     callback(null, domainObjs, tenantList, domList);
                     return;
+                }
+                tmpDomainObjs = {};
+                for (var i = 0; i < projCnt; i++) {
+                    var domId = tenantList['tenants'][i]['domain_id'];
+                    if ((null != domId) &&
+                        (false == authApi.isDefaultDomain(request, domId))) {
+                        domId =
+                            commonUtils.convertUUIDToString(tenantList['tenants'][i]['domain_id']);
+                        var domFqn = authApi.getDomainNameByUUID(request, domId,
+                                                        domList['domains']);
+                        if (null == domFqn) {
+                            if (null != request.cookies.domain) {
+                                domFqn = request.cookies.domain;
+                            } else {
+                                domFqn = authApi.getDefaultDomain(request);
+                            }
+                        }
+                        if ((null == tmpDomainObjs[domId]) && (null != domFqn)) {
+                            domainObjs['domains'].push({'fq_name': [domFqn], 'uuid': domId});
+                            tmpDomainObjs[domId] = domId;
+                        }
+                        if ((null != domain) && (domFqn != domain)) {
+                            tenantList['tenants'].splice(i, 1);
+                            i--;
+                            projCnt--;
+                        } else {
+                            tenantList['tenants'][i]['domain_name'] = domFqn;
+                        }
+                    } else {
+                        var defDomain = authApi.getDefaultDomain(request);
+                        if (null == tmpDomainObjs[domId]) {
+                            domainObjs['domains'].push({'fq_name': [defDomain], 'uuid': domId});
+                            tmpDomainObjs[domId] = domId;
+                        }
+                        tenantList['tenants'][i]['domain_name'] = defDomain;
+                    }
                 }
                 var allDomList = domList['domains'];
                 var allDomCnt = allDomList.length;
@@ -166,8 +196,168 @@ function getTenantListAndSyncDomain (request, appData, callback)
     });
 }
 
+function getRoles (req, res, appData)
+{
+    var authApi = require('./auth.api');
+    return authApi.getRoleList(req, function(error, roles){
+        commonUtils.handleJSONResponse(error, res, roles);
+    });
+};
+
+function getTokenIdByReqObj (req, project)
+{
+    var tokenObjs = req.session.tokenObjs;
+    var tokenId =
+        commonUtils.getValueByJsonPath(tokenObjs, project + ';token;id', null);
+    if (null == tokenId) {
+        var adminProjList = authApi.getAdminProjectList(req);
+        if ((null != adminProjList) && (adminProjList.length > 0)) {
+            for (project in tokenObjs) {
+                if (-1 != adminProjList.indexOf(project)) {
+                    tokenId =
+                        commonUtils.getValueByJsonPath(tokenObjs[project],
+                                                       'token;id', null);
+                    break;
+                }
+            }
+        }
+    }
+    if (null == tokenId) {
+        for (var project in tokenObjs) {
+            tokenId =
+                commonUtils.getValueByJsonPath(tokenObjs[project],
+                                               'token;id', null);
+        }
+    }
+    return tokenId;
+}
+
+function getProjectTokenRole (userObj, callback)
+{
+    var projName = userObj.tenant;
+    var req = userObj.req;
+    var tokenObjs = req.session.tokenObjs;
+    var userRoles = req.session.userRoles;
+
+    if ((null != tokenObjs) && (null != tokenObjs[projName]) &&
+        (null != userRoles) && (null != userRoles[projName])) {
+        callback(null, {userObj: userObj});
+        return;
+    }
+    authApi.getUIUserRoleByTenant(userObj, function(err, roles) {
+        if ((null != err) || (null == roles)) {
+            logutils.logger.debug('Failed to get token for project ' +
+                                  projName + ", using last token");
+            req.session.tokenObjs[projName] = req.session.last_token_obj_used;
+        }
+        callback(null, {data: roles, userObj: userObj});
+    });
+}
+
+function getProjectGet (dataObj, callback)
+{
+    var uiRoles = null;
+    var userObj = dataObj.userObj;
+    var req     = userObj.req;
+    var projId  = req.param('id');
+    var project = req.param('project');
+    var tokenid = userObj.tokenid;
+    var appData = userObj.appData;
+    var headers = {};
+
+    var tokenObjs = req.session.tokenObjs;
+    var syncedProj =
+        commonUtils.getValueByJsonPath(req,
+                                       'session;syncedProjects;' + projId +
+                                       ';name', null);
+    if (null != syncedProj) {
+        callback(null, dataObj);
+        return;
+    }
+
+    var tokenId = getTokenIdByReqObj(req, project);
+    if (null != tokenId) {
+        headers['X-Auth-Token'] = tokenId;
+        try {
+            headers['X_API_ROLE'] = req.session.userRoles[project].join(',');
+        } catch(e) {
+            headers['X_API_ROLE'] = null;
+        }
+    }
+    var projUrl = '/project/' + projId + '?exclude_back_refs=true' +
+        '&exclude_children=true';
+    configApiServer.apiGet(projUrl, appData, function(error, data) {
+        if ((null != error) || (null == data)) {
+            logutils.logger.error('Project GET failed ' + req.param('id'));
+            dataObj.uiRoles = uiRoles;
+            callback(null, dataObj);
+            return;
+        }
+
+        if (null == req.session.syncedProjects) {
+            req.session.syncedProjects = {};
+        }
+        req.session.syncedProjects[projId] = {};
+        req.session.syncedProjects[projId]['name'] = project;
+        dataObj.uiRoles = uiRoles;
+        callback(null, dataObj);
+        return;
+    }, headers);
+}
+
+function getProjectRole (req, res, appData)
+{
+    var uiRoles = null;
+    var projId = req.param('id');
+    var projName = req.param('project');
+    var projUrl = '/project/' + projId + '?exclude_back_refs=true' +
+        '&exclude_children=true';
+    var authApi = require('./auth.api');
+    var headers = {};
+    var tokenId = null;
+
+    var syncedProj =
+        commonUtils.getValueByJsonPath(req,
+                                       'session;syncedProjects;' + projId +
+                                       ';name', null);
+    var tokenObjs = req.session.tokenObjs;
+    var userRoles = req.session.userRoles;
+
+    if ((null != syncedProj) && (null != tokenObjs) &&
+        (null != tokenObjs[projName]) && (null != userRoles) &&
+        (null != userRoles[projName])) {
+        commonUtils.handleJSONResponse(null, res, uiRoles);
+        return;
+    }
+
+    tokenId = getTokenIdByReqObj(req, projName);
+    if (global.ALL_PROJECT_UUID == projId) {
+        /* 'all' project request, so do not do anything now */
+        commonUtils.handleJSONResponse(null, res, uiRoles);
+        return;
+    }
+
+    var userObj = {'tokenid': tokenId, 'tenant': projName, 'req': req,
+                   'appData': appData};
+    async.waterfall([
+        async.apply(getProjectTokenRole, userObj),
+        getProjectGet
+    ],
+    function(error, dataObj) {
+        if (null != dataObj) {
+            if (true == dataObj.redirectToLogout) {
+                commonUtils.redirectToLogout(req, res);
+                return;
+            }
+        }
+        commonUtils.handleJSONResponse(null, res, uiRoles);
+    });
+}
+
 exports.listProjectsAPIServer = listProjectsAPIServer;
 exports.getProjectsFromApiServer = getProjectsFromApiServer;
 exports.getTenantListAndSyncDomain = getTenantListAndSyncDomain;
 exports.getDomainsFromApiServer = getDomainsFromApiServer;
+exports.getProjectRole = getProjectRole;
+exports.getRoles = getRoles;
 

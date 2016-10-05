@@ -8,11 +8,14 @@ var config = process.mainModule.exports.config,
     logutils = require('../../utils/log.utils'),
     discClient = require('../../common/discoveryclient.api'),
     commonUtils = require('../../utils/common.utils'),
+    redisUtils = require('../../utils/redis.utils'),
     os = require('os')
     ;
 
 var discServiceRetryList = [];
 var serviceTimers = {};
+var maxRetryCount = 12;
+var discCheckTimer = 10000; /* 10 Seconds */
 
 var server_ip = ((null != config) && (null != config.cnfg) && 
                  (null != config.cnfg.server_ip)) ? config.cnfg.server_ip :
@@ -33,17 +36,60 @@ var redisSubClient;
 var clientID = null;
 var discServiceSubsStarted = false;
 
-function createRedisClientAndStartSubscribeToDiscoveryService (reqFrom)
+function checkIfDiscoveryServerReachable (callback)
+{
+    var reqUrl = '/';
+    discServer.api.get(reqUrl, function(error, data) {
+        if (null !== error) {
+            callback(false);
+            return;
+        }
+        callback(true);
+    });
+}
+
+function createRedisClientAndStartSubscribeToDiscoveryService (reqFrom,
+                                                               retryCount)
+{
+    if (null == retryCount) {
+        retryCount = 0;
+    }
+    var webuiIP = discClient.getWebUINodeIP();
+    if (null == webuiIP) {
+        /* Then create a connection to discovery client and then update the
+         * localAddress
+         */
+        checkIfDiscoveryServerReachable(function(isActive) {
+            if (true == isActive) {
+                createRedisClientAndStartSubscribeToDiscoveryServiceCB(reqFrom);
+                return;
+            }
+            var timer = setTimeout(function() {
+                checkIfDiscoveryServerReachable(function(isActive) {
+                    if ((false == isActive) && (retryCount <= maxRetryCount)) {
+                        retryCount++;
+                        createRedisClientAndStartSubscribeToDiscoveryService(reqFrom,
+                                                                             retryCount);
+                        return;
+                    } else {
+                        clearTimeout(timer);
+                        createRedisClientAndStartSubscribeToDiscoveryServiceCB(reqFrom);
+                    }
+                });
+            }, discCheckTimer);
+        });
+    } else {
+        createRedisClientAndStartSubscribeToDiscoveryServiceCB(reqFrom);
+    }
+}
+
+function createRedisClientAndStartSubscribeToDiscoveryServiceCB(reqFrom)
 {
     if (null == redisSubClient) {
-        commonUtils.createRedisClient(function(client) {
-            redisSubClient = client;
-            redisSubClient.subscribe(global.DISC_SERVER_SUB_CLIENT_RESPONSE);
-            startSubscribeToDiscoveryServiceOrSendData(reqFrom);
-        });
-        commonUtils.createRedisClient(function(client) {
-            redisPubClient = client;
-        });
+        redisSubClient = redisUtils.createRedisClient();
+        redisSubClient.subscribe(global.DISC_SERVER_SUB_CLIENT_RESPONSE);
+        startSubscribeToDiscoveryServiceOrSendData(reqFrom);
+        redisPubClient = redisUtils.createRedisClient();
     } else {
         startSubscribeToDiscoveryServiceOrSendData(reqFrom);
     }
@@ -56,9 +102,13 @@ function subscribeToDiscoveryService (serviceObj, callback)
     var instCnt     = serviceObj['instCnt'];
 
     var clientID  = os.hostname() + ':' + clientType;
+    var webuiIP = discClient.getWebUINodeIP();
     var postJson =  
-        { "service": serviceName, "instances": instCnt, "client": clientID,
-            "client-type": clientType};
+        { "service": serviceName, "instances": 0, "min-instances": instCnt,
+          "client": clientID, "client-type": clientType};
+    if (null != webuiIP) {
+        postJson['remote-addr'] = webuiIP;
+    }
     var url = '/subscribe';
 
     discServer.api.post(url, postJson, function(err, data) {
@@ -107,12 +157,17 @@ function startSubscribeToDiscoveryService ()
     serviceList[0] = {};
     serviceList[0]['serviceType'] =
         global.DISC_SERVICE_TYPE_OP_SERVER;
-    serviceList[0]['instCnt'] = global.DISC_SERVICE_MAX_INST_COUNT_OP_SERVER;
+    serviceList[0]['instCnt'] = global.DISC_SERVICE_MIN_INST_COUNT_OP_SERVER;
 
     serviceList[1] = {};
     serviceList[1]['serviceType'] = 
         global.DISC_SERVICE_TYPE_API_SERVER;
-    serviceList[1]['instCnt'] = global.DISC_SERVICE_MAX_INST_COUNT_API_SERVER;
+    serviceList[1]['instCnt'] = global.DISC_SERVICE_MIN_INST_COUNT_API_SERVER;
+
+    serviceList[2] = {};
+    serviceList[2]['serviceType'] =
+        global.DISC_SERVICE_TYPE_DNS_SERVER;
+    serviceList[2]['instCnt'] = global.DISC_SERVICE_MIN_INST_COUNT_DNS_SERVER;
 
     var len = serviceList.length;
     async.map(serviceList, subscribeToDiscoveryService, function(err, data) {
@@ -127,11 +182,13 @@ function getInstCountByServiceType (serviceType)
 {
     switch (serviceType) {
     case global.DISC_SERVICE_TYPE_OP_SERVER:
-        return global.DISC_SERVICE_MAX_INST_COUNT_OP_SERVER;
+        return global.DISC_SERVICE_MIN_INST_COUNT_OP_SERVER;
     case global.DISC_SERVICE_TYPE_API_SERVER:
-        return global.DISC_SERVICE_MAX_INST_COUNT_API_SERVER;
+        return global.DISC_SERVICE_MIN_INST_COUNT_API_SERVER;
+    case global.DISC_SERVICE_TYPE_DNS_SERVER:
+        return global.DISC_SERVICE_MIN_INST_COUNT_DNS_SERVER;
     default:
-        return global.DISC_SERVICE_MAX_INST_COUNT;
+        return global.DISC_SERVICE_MIN_INST_COUNT;
     }
 }
 
@@ -151,7 +208,7 @@ function doDiscoveryServiceSubscribe (req, res, appData)
     startSubscribeToDiscoveryService();
     var servObj = {};
     servObj['serviceType'] = service;
-    servObj['instCnt'] = (null == instCnt) ? global.DISC_SERVICE_MAX_INST_COUNT
+    servObj['instCnt'] = (null == instCnt) ? global.DISC_SERVICE_MIN_INST_COUNT
         : parseInt(instCnt);
     subscribeToDiscoveryService(servObj, function(err, data) {
         commonUtils.handleJSONResponse(err, res, data);

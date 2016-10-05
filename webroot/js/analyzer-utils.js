@@ -17,12 +17,12 @@ function startPacketCapture4Interface(interfaceUUID, vnFQN, vmName) {
         return;
     }
     var closePostData = {'interfaceUUID': interfaceUUID, 'action': 'stop'};
-    createPCAPModal('stopPacketCapture4Interface', closePostData, 'Interface Packet Capture');
+    /*createPCAPModal('stopPacketCapture4Interface', closePostData, 'Interface Packet Capture');*/
     doAjaxCall("/api/tenants/config/interface/packet-capture", "POST", JSON.stringify(postData), "getAnalyzerVNCUrl", "startPCAP4InterfaceFailureCB", null, postData);
 };
 
 function createPCAPModal(closeClickAction, closePostData, title) {
-    var modalLoadingBody = '<i id="pcap-loading" class="icon-spinner icon-spin blue bigger-125 offset4"></i> &nbsp; Starting Packet Capture ...';
+    var modalLoadingBody = '<i id="pcap-loading" class="fa fa-spinner fa-spin blue bigger-125 offset4"></i> &nbsp; Starting Packet Capture ...';
     $.contrailBootstrapModal({
         id: 'pcapModal',
         title: title,
@@ -74,14 +74,16 @@ function getFlowAnalyzerVNCUrl(response, cbParams) {
 
 function getAnalyzerVNCUrlSuccessCB(result, cbParams) {
     var href = jsonPath(result, "$.console.url")[0];
-    var modalBody = '<div class="row-fluid">' +
-        '<div class="span10"><p>If console is not responding to keyboard input: click the grey status bar below.&nbsp;&nbsp;<a href="' + href + '" style="text-decoration: underline" target=_blank>Click here to show only console</a></p></div>' +
-        '<div id="pcap-direction" class="span2 pull-right"></div>' +
+    window.open(href);
+    return;
+    /*var modalBody = '<div class="row-fluid">' +
+        '<div class="col-xs-10"><p>If console is not responding to keyboard input: click the grey status bar below.&nbsp;&nbsp;<a href="' + href + '" style="text-decoration: underline" target=_blank>Click here to show only console</a></p></div>' +
+        '<div id="pcap-direction" class="col-xs-2 pull-right"></div>' +
         '<i id="pcap-direction-loading" class="icon-spinner icon-spin blue bigger-150 pull-right hide"></i>' +
         '</div>' +
         '<br>' +
         '<div class="row-fluid">' +
-        '<iframe id="vnc-console-frame" src="" class="span12 height-840"></iframe>' +
+        '<iframe id="vnc-console-frame" src="" class="col-xs-12 height-840"></iframe>' +
         '</div>';
     $('#pcapModal .modal-body').html(modalBody);
     $("#vnc-console-frame").attr("src", href);
@@ -102,7 +104,7 @@ function getAnalyzerVNCUrlSuccessCB(result, cbParams) {
         }
     }).data("contrailDropdown");
 
-    dropdownlist.value(cbParams['direction']);
+    dropdownlist.value(cbParams['direction']);*/
 }
 
 function getDirectionText(direction) {
@@ -586,21 +588,71 @@ function showUnderlayPaths(data) {
         params.sport = data.sport;
         params.dport = data.dport;
         params.protocol = data.protocol;
-        params.direction = (data.direction_ing === 0) ? "egress" : "ingress";
+        if(data.direction_ing === 0) {
+            params.direction = 'egress';
+            params.nodeIP = data.other_vrouter_ip;
+        } else {
+            params.direction = 'ingress';
+            params.nodeIP = data.vrouter_ip;
+        }
+        if(currentPage == 'mon_infra_underlay' && typeof underlayRenderer === 'object' && !underlayRenderer.getModel().checkIPInVrouterList(params)) {
+            showInfoWindow("Cannot Map the path for the selected flow", "Info");
+            return;
+        }
         if(data.hasOwnProperty('startTime') && data.hasOwnProperty('endTime')) {
             params['startTime'] = data['startTime'];
             params['endTime'] = data['endTime'];
         } else {
             params['minsSince'] = 300;
         }
+        if(currentPage == 'mon_infra_underlay') {
+            var progressBar = $("#network_topology").find('.topology-visualization-loading');
+            $(progressBar).show();
+            $(progressBar).css('margin-bottom',$(progressBar).parent().height());
+            
+        }
         switch(currentPage) {
             case 'mon_infra_underlay':
+                $("#network_topology").find('.topology-visualization-loading').show();
                 var cfg = {
                     url     : "/api/tenant/networking/underlay-path",
                     type    : "POST",
                     data    : {data: params},
                     callback : function(response) {
-                        underlayRenderer.getView().highlightPath(response, {data: params});
+                        $("#network_topology").find('.topology-visualization-loading').hide();
+                        if(params['startAt'] != null && underlayLastInteracted > params['startAt'])
+                            return;
+                        if(typeof underlayRenderer === 'object') {
+                            underlayRenderer.getModel().setFlowPath(response);
+                            if (ifNull(response['nodes'],[]).length == 0 || ifNull(response['links'],[]).length == 0) {
+                                showInfoWindow("Cannot Map the path for selected flow", "Info");
+                                underlayRenderer.getView().resetTopology(false);
+                            } else {
+                                underlayRenderer.getView().highlightPath(response, {data: params});
+                            }
+                            if(ifNull(response['nodes'],[]).length > 0 || ifNull(response['links']).length > 0) {
+                                $('html,body').animate({scrollTop:0}, 500);
+                            }
+                        }
+                    },
+                    failureCallback: function(err) {
+                        if(params['startAt'] != null && underlayLastInteracted > params['startAt'])
+                            return;
+                        $("#network_topology").find('.topology-visualization-loading').hide();
+                        showInfoWindow('Error in fetching details','Error');
+                    },
+                    completeCallback: function(ajaxObj, state) {
+                        if(state != 'success') {
+                            $("#network_topology").find('.topology-visualization-loading').hide();
+                            if(state == 'timeout') {
+                                showInfoWindow('Timeout in fetching details','Error');
+                            } else {
+                                showInfoWindow('Error in fetching details','Error');
+                            }
+                            if(null !== underlayRenderer && typeof underlayRenderer === "object"){
+                                underlayRenderer.getView().resetTopology(false);
+                            }
+                        }
                     }
                 };
                 underlayRenderer.getController().getModelData(cfg);

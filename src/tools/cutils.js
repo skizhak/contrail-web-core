@@ -21,7 +21,8 @@ function getCookie(name) {
 }
 
 function setCookie(name, value) {
-    document.cookie = name + "=" + escape(value) + "; expires=Sun, 17 Jan 2038 00:00:00 UTC; path=/"
+    document.cookie = name + "=" + escape(value) +
+        "; expires=Sun, 17 Jan 2038 00:00:00 UTC; path=/";
 }
 
 var class_A = 1;
@@ -663,7 +664,7 @@ function genarateGateway(cidr,from){
         gateway = v4.Address.fromBigInteger(bigInt).address;
     } else {    
         ciderValue = new v6.Address(cidr); 
-        if(ciderValue.isValid() === true && ciderValue.getScope() == "Global"){
+        if(ciderValue.isValid() === true){
             var ipcreated;
             var bigInt;
             if(from == "end"){
@@ -698,7 +699,92 @@ function isIPBoundToRange(range,ipAddress){
     }
 }
 
+function isIPBoundToIPRange(rangeStart, rangeEnd, ipAddress){
+    var code = 2;//Out of Range
+    var IP = new v4.Address(ipAddress);
+    var IPRangeStart = new v4.Address(rangeStart);
+    var IPRangeEnd = new v4.Address(rangeEnd);
+    if(IP.isValid() === true && IPRangeStart.isValid() === true && IPRangeEnd.isValid()){
+        var IPInt = IP.bigInteger();
+        var startIPInt = IPRangeStart.bigInteger();
+        var endIPInt = IPRangeEnd.bigInteger();
+        if(startIPInt.compareTo(IPInt) <= 0 && endIPInt.compareTo(IPInt) >= 0){
+            code = 0;// In Range
+        }
+    } else {
+        IP = new v6.Address(ipAddress); 
+        IPRangeStart = new v6.Address(rangeStart);
+        IPRangeEnd = new v6.Address(rangeEnd);
+        if(IP.isValid() === true && IPRangeStart.isValid() === true && IPRangeEnd.isValid()){
+            var IPInt = IP.bigInteger();
+            var startIPInt = IPRangeStart.bigInteger();
+            var endIPInt = IPRangeEnd.bigInteger();
+            if(startIPInt.compareTo(IPInt) <= 0 && endIPInt.compareTo(IPInt) >= 0){
+                code = 0;// In Range
+            }
+        } else {
+            code = 1;// Invalid IP
+        }
+    }
+    //code 0-> In Range.
+    //code 1-> Invalid IP.
+    //code 2-> Not in Range.
+    return code;
+}
+
+function isStartAddress(cidr, ipAddress){
+    var cidrAddress = new v4.Address(cidr);
+    if(cidrAddress.isValid() == true){
+        if(isIPv4(ipAddress)){
+            var cidrBigInt = new v4.Address(ipAddress).bigInteger();
+            var IPBigInt = new v4.Address(cidrAddress.startAddress().address).bigInteger();
+            if(cidrBigInt.compareTo(IPBigInt) == 0){
+                return true;
+            }
+        }
+    } else {
+        cidrAddress = new v6.Address(cidr); 
+        if(cidrAddress.isValid() == true){
+            if(isIPv6(ipAddress)){
+                var cidrBigInt = new v6.Address(cidrAddress.startAddress().address).bigInteger();
+                var IPBigInt = new v6.Address(ipAddress).bigInteger();
+                if(cidrBigInt.compareTo(IPBigInt) == 0){
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+function isEndAddress(cidr, ipAddress){
+    var cidrAddress = new v4.Address(cidr);
+    if(cidrAddress.isValid() == true){
+        if(isIPv4(ipAddress)){
+            var cidrBigInt = new v4.Address(ipAddress).bigInteger();
+            var IPBigInt = new v4.Address(cidrAddress.endAddress().address).bigInteger();
+            if(cidrBigInt.compareTo(IPBigInt) == 0){
+                return true;
+            }
+        }
+    } else {
+        cidrAddress = new v6.Address(cidr); 
+        if(cidrAddress.isValid() == true){
+            if(isIPv6(ipAddress)){
+                var cidrBigInt = new v6.Address(cidrAddress.endAddress().address).bigInteger();
+                var IPBigInt = new v6.Address(ipAddress).bigInteger();
+                if(cidrBigInt.compareTo(IPBigInt) == 0){
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 function isValidIP(ipAddress){
+    if(ipAddress == null)
+        return false;
     var IP = new v4.Address(ipAddress); 
     if(IP.isValid() === true){
         return true;
@@ -709,23 +795,33 @@ function isValidIP(ipAddress){
     }
     return false;
 }
-
 function isIPv4(ipAddress){
+    if(ipAddress == null)
+        return false;
     var IP = new v4.Address(ipAddress); 
     if(IP.isValid() === true){
         return true;
     }
     return false;
 }
-
 function isIPv6(ipAddress){
-    var IP = new v6.Address(ipAddress); 
-    if(IP.isValid() === true){
-        return true;
+    var IP;
+
+    if(ipAddress == null ) {
+        return false;
+    } else {
+        try {
+            IP = new v6.Address(ipAddress);
+        } catch (error) {
+            return false;
+        }
+        if(IP.isValid() === true){
+            return true;
+        }
     }
+
     return false;
 }
-
 function validip(ip) {
     if (null != ip && "" != ip) {
         ipsplit = ip.split("/");
@@ -1051,7 +1147,7 @@ function createSuccessDialog() {
 	$(btnClose).attr("aria-hidden", "true");
 
 	var iconRemove = document.createElement("i");
-	$(iconRemove).addClass("icon-remove");
+	$(iconRemove).addClass("fa fa-remove");
 	btnClose.appendChild(iconRemove);
 	
 	var hdrTitle = document.createElement("h6");
@@ -1224,28 +1320,61 @@ function formatVirtualRouterType(type) {
     var formattedType = '';
     if(type === '-') {
          formattedType = type;
-    } else if(typeof type === 'object') {
-        for(var i = 0; i < type.length; i++) {
-            var actText = '';
-            switch(type[i]) {
+    } else if(type instanceof  Array) {
+        if(type.length > 0) {
+            for(var i = 0; i < type.length; i++) {
+                var actText = '';
+                switch(type[i]) {
+                    case 'hypervisor' :
+                        actText = 'Hypervisor';
+                        break;
+                    case 'embedded' :
+                        actText = 'Embedded';
+                        break;
+                    case 'tor-agent' :
+                        actText = 'TOR Agent';
+                        break;
+                    case 'tor-service-node' :
+                        actText = 'TOR Service Node';
+                        break;
+                    default :
+                        actText = 'Hypervisor';
+                        break;
+                }
+                if(formattedType === '') {
+                    formattedType = actText
+                } else {
+                    formattedType += ' , ' + actText;
+                }
+            }
+        } else {
+            formattedType = 'Hypervisor';
+        }
+    }else {
+            switch(type) {
+                case 'hypervisor' :
+                    formattedType = 'Hypervisor';
+                    break;
                 case 'embedded' :
-                    actText = 'Embedded';
+                    formattedType = 'Embedded';
                     break;
                 case 'tor-agent' :
-                    actText = 'TOR Agent';
-                    break; 
+                    formattedType = 'TOR Agent';
+                    break;
                 case 'tor-service-node' :
-                    actText = 'TOR Service Node';
-                    break;                 
-            }                
-            if(formattedType === '') {
-                formattedType = actText
-            } else {
-                formattedType += ' , ' + actText;
+                    formattedType = 'TOR Service Node';
+                    break;
+                default :
+                    formattedType = 'Hypervisor';
+                    break;
             }
-        }
     }
-    return formattedType;         
+    return formattedType;
+}
+function isValidMACAddress(mac) {
+    mac = mac.toUpperCase();
+    var mac_address_regex = /^(([0-9A-F]{1,2}[:-]){5}[0-9A-F]{1,2}?)+$/;
+    return mac_address_regex.test(mac);
 }
 
 cutils.getCookie = getCookie;       
@@ -1312,3 +1441,7 @@ cutils.isIPv4 = isIPv4;
 cutils.isIPv6 = isIPv6;
 cutils.isIPBoundToRange = isIPBoundToRange;
 cutils.formatVirtualRouterType = formatVirtualRouterType;
+cutils.isValidMACAddress = isValidMACAddress;
+cutils.isIPBoundToIPRange = isIPBoundToIPRange;
+cutils.isStartAddress = isStartAddress;
+cutils.isEndAddress = isEndAddress;

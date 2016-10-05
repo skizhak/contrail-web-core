@@ -51,10 +51,51 @@ function getUserRoleByAuthResponse (cloudStackUserLoginResp)
 {
     var userType = cloudStackUserLoginResp['loginresponse']['type'];
     if (CLOUDSTACK_USER_TYPE_ADMIN == userType) {
-        return global.STR_ROLE_ADMIN;
+        return [global.STR_ROLE_ADMIN];
     } else {
-        global.STR_ROLE_USER;
+        return [global.STR_ROLE_USER];
     }
+}
+
+function getUIUserRoleByTenant (userObj, callback)
+{
+    var userRoles = [global.STR_ROLE_USER];
+    if ((null == userObj) || (null == userObj.req)) {
+        callback(null, userRoles);
+        return;
+    }
+    userRoles =
+         commonUtils.getValueByJsonPath(userObj.req,
+                                        'session;userRole',
+                                        [global.STR_ROLE_USER]);
+    callback(null, userRoles);
+}
+
+function getUIRolesByExtRoles (extRoles)
+{
+    var roles = [];
+    if ((null == extRoles) || (!extRoles.length)) {
+        return [global.STR_ROLE_USER];
+    }
+    var roleCnt = extRoles.length;
+    for (var i = 0; i < roleCnt; i++) {
+        roles.push(extRoles[i]['name']);
+    }
+    if (-1 != roles.indexOf('admin')) {
+        return [global.STR_ROLE_ADMIN];
+    }
+    return [global.STR_ROLE_USER];
+}
+
+function getExtUserRoleByTenant (userObj, callback)
+{
+    getUIUserRoleByTenant(userObj, function(uiRoles) {
+        if (-1 != uiRoles.indexOf(global.STR_ROLE_ADMIN)) {
+            callback(null, {'roles': [{'name': 'admin'}]});
+            return;
+        }
+        callback(null, {'roles': [{'name': 'Member'}]});
+    });
 }
 
 function getUsers (req, callback)
@@ -94,18 +135,13 @@ function authenticate (req, res, appData, callback)
     var passwdCipher = null
     var userEncrypted = null;
     var passwdEncrypted = null;
-    var loginErrFile = 'webroot/html/login-error.html';
     if(post.urlHash != null)
         urlHash = post.urlHash;
 
     doAuth(username, password, function (err, data, response) {
         if ((err) || (null == data)) {
             req.session.isAuthenticated = false;
-            commonUtils.changeFileContentAndSend(res, loginErrFile,
-                                                 global.CONTRAIL_LOGIN_ERROR,
-                                                 messages.error.invalid_user_pass,
-                                                 function() { 
-            });
+            callback(messages.error.invalid_user_pass);
             return;
         }
         req.session.isAuthenticated = true;
@@ -121,7 +157,7 @@ function authenticate (req, res, appData, callback)
                           '; expires=' +
                           new Date(new Date().getTime() +
                                    global.MAX_AGE_SESSION_ID).toUTCString());
-            res.redirect('/' + urlHash);
+            callback(null, '/' + urlHash);
         });
     });
 }
@@ -196,6 +232,21 @@ function getUserAuthDataByConfigAuthObj (authObj, callback)
     callback(null, null);
 }
 
+function deleteAllTokens (req, callback)
+{
+    callback(null, null);
+}
+
+function getServiceAPIVersionByReqObj (req, svcType, callback)
+{
+    callback(null);
+}
+
+function shiftServiceEndpointList (req, serviceType, regionName)
+{
+    return;
+}
+
 exports.getAPIServerAuthParamsByReq = getAPIServerAuthParamsByReq;
 exports.authenticate = authenticate;
 exports.getTenantList = getTenantList;
@@ -203,4 +254,10 @@ exports.formatTenantList = formatTenantList;
 exports.getProjectList = getProjectList;
 exports.getSessionExpiryTime = getSessionExpiryTime;
 exports.getUserAuthDataByConfigAuthObj = getUserAuthDataByConfigAuthObj;
+exports.deleteAllTokens = deleteAllTokens;
+exports.getUIUserRoleByTenant = getUIUserRoleByTenant;
+exports.getExtUserRoleByTenant = getExtUserRoleByTenant;
+exports.getUIRolesByExtRoles = getUIRolesByExtRoles;
+exports.getServiceAPIVersionByReqObj = getServiceAPIVersionByReqObj;
+exports.shiftServiceEndpointList = shiftServiceEndpointList;
 

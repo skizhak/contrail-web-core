@@ -13,6 +13,7 @@ global.service = {};
 global.service.MAINSEREVR = 'mainServer';
 global.service.MIDDLEWARE = 'middleware';
 
+global.MSG_CMD_KILLALL = 'killAll';
 global.STR_MAIN_WEB_SERVER_READY = 'mainWebServerReady';
 
 /* JOB */
@@ -47,12 +48,14 @@ global.STR_JOB_TYPE_CACHE = 'cache';
 global.STR_SEND_TO_JOB_SERVER = 'sendToJobServer';
 global.STR_DISCOVERY_SERVICE_RESPONSE = 'discoveryServiceResponse';
 global.DISC_SERVICE_TYPE_OP_SERVER = 'OpServer';
-global.DISC_SERVICE_MAX_INST_COUNT_OP_SERVER = 20;
+global.DISC_SERVICE_MIN_INST_COUNT_OP_SERVER = 1;
 global.DISC_SERVICE_TYPE_API_SERVER = 'ApiServer';
-global.DISC_SERVICE_MAX_INST_COUNT_API_SERVER = 20;
+global.DISC_SERVICE_MIN_INST_COUNT_API_SERVER = 1;
+global.DISC_SERVICE_TYPE_DNS_SERVER = 'dns-server';
+global.DISC_SERVICE_MIN_INST_COUNT_DNS_SERVER = 1;
 global.DISC_SERVER_SUB_CLINET = 'discoveryServiceSubscribeClient';
 global.DISC_SERVER_SUB_CLIENT_RESPONSE = 'discoveryServiceSubscribeClientResp';
-global.DISC_SERVICE_MAX_INST_COUNT = 20;
+global.DISC_SERVICE_MIN_INST_COUNT = 1;
 
 /* Topology tree caching */
 global.STR_GET_PROJECTS_TREE = 'getProjectsTree';
@@ -86,6 +89,10 @@ global.SERVICE_ENDPT_TYPE_IMAGE = 'image';
 global.SERVICE_ENDPT_TYPE_VOLUME = 'volume';
 global.SERVICE_ENDPT_TYPE_EC2 = 'ec2';
 global.SERVICE_ENDPT_TYPE_IDENTITY = 'identity';
+global.SERVICE_ENDPT_TYPE_APISERVER = 'apiServer';
+global.SERVICE_ENDPT_TYPE_OPSERVER = 'opServer';
+global.SERVICE_ENDPT_TYPE_CGC = 'cgc';
+global.REGION_ALL = 'All Regions';
 
 /* http status codes
  */
@@ -159,7 +166,7 @@ global.FLOW_TIME_SLICE_FOR_1_HR = 10000;
 global.FLOW_TIME_SLICE_FOR_24_HRS = 86400000;
 global.FLOW_TIME_SLICE_FOR_1_HR = 3600000;
 global.FLOW_TIME_SLICE_FOR_60_MIN = 60000;
-global.MAX_AGE_SESSION_ID = 365 * 24 * 60 * 60 * 1000;
+global.MAX_AGE_SESSION_ID = 1 * 60 * 60 * 1000;
 /* 24 Hrs, In Milliseconds */
 global.STR_REDIS_STORE_SESSION_ID_PREFIX = 'mySession:';
 global.STR_SESSION_AUTHENTICATED = 'sessAuthenticated';
@@ -169,11 +176,8 @@ global.DEMO_USER_MAX_AGE_SESSION = 2 * 60 * 60 * 1000;
 
 /* UI Roles */
 global.STR_ROLE_USER = 'member';
-global.STR_ROLE_ADMIN = 'superAdmin';
-
-/* Service Instance */
-global.INSTANCE_SPAWNING_TIMEOUT = 10 * 60 * 1000;
-/* 10 Mins */
+global.STR_ROLE_ADMIN = 'cloudAdmin';
+global.STR_ROLE_WILDCARD = '*';
 
 global.DFLT_REDIS_SERVER_PORT = '6379';
 global.DFLT_REDIS_SERVER_IP = '127.0.0.1';
@@ -198,6 +202,11 @@ global.EMPTY_BGP_PEER_ATTR_JSON = {"session": [
 ]};
 global.TOKEN_URL = '/v2.0/tokens';
 
+global.PKI_ASN1_PREFIX = 'MII';
+global.PKIZ_PREFIX = 'PKIZ_';
+
+global.ALL_PROJECT_UUID = 'all';
+
 global.label = {};
 global.label.VNCONFIG_API_SERVER = 'vnconfig-api-server';
 global.label.OPS_API_SERVER = 'ops-api-server';
@@ -208,7 +217,12 @@ global.label.STORAGE_SERVER = 'storage-server';
 global.label.COMPUTE_SERVER = 'compute-server';
 global.label.DISCOVERY_SERVER = 'discovery-server';
 global.label.API_SERVER = 'api-server'
+global.label.OPSERVER = 'opserver';
+global.label.DNS_SERVER = 'dns-server'
 global.label.VCENTER_SERVER = 'vCenter-server'
+global.label.VROUTER = 'vrouter';
+global.label.CONTROL_NODE = 'control-node';
+global.label.CGC = 'contrail-global-controller';
 global.SANDESH_CONTROL_NODE_PORT = '8083';
 global.SANDESH_COMPUTE_NODE_PORT = '8085';
 global.SANDESH_DNS_AGENT_PORT = '8092';
@@ -217,6 +231,8 @@ global.PROTOCOL_HTTP = 'http';
 global.PROTOCOL_HTTPS = 'https';
 global.HTTP_URL = 'http://';
 global.HTTPS_URL = 'https://';
+global.DEFAULT_CONTRAIL_API_IDENTIFIER = 'ApiServer';
+global.DEFAULT_CONTRAIL_ANALYTICS_IDENTIFIER = 'OpServer';
 
 global.RESP_DATA_NOT_AVAILABLE = '-';
 global.GET_VROUTERS_LIST = 'getVRoutersList';
@@ -269,8 +285,20 @@ global.QUERY_JSON = {
                                                     "select_fields": []
                                              },
     OverlayToUnderlayFlowMap: {"table": 'OverlayToUnderlayFlowMap', "start_time": "",
-                            "end_time": "", "select_fields": ["u_prouter", "u_pifindex"]}
-                                    
+                            "end_time": "", "select_fields": ["u_prouter", "u_pifindex"]
+    },
+    StatTable_UveVMInterfaceAgent_if_stats: {
+        "table": 'StatTable.UveVMInterfaceAgent.if_stats',
+        "start_time": "",
+        "end_time": "",
+        "select_fields": []
+    },
+    StatTable_UveVMInterfaceAgent_fip_diff_stats: {
+        "table": 'StatTable.UveVMInterfaceAgent.fip_diff_stats',
+        "start_time": "",
+        "end_time": "",
+        "select_fields": []
+    }
 };
 
 global.STATS_PROP = {
@@ -307,7 +335,7 @@ global.VALID_LIKE_OPR_FIELDS = ['sourcevn', 'destvn'];
 global.VALID_RANGE_OPR_FIELDS = ['protocol', 'sourceip', 'destip', 'sport', 'dport'];
 
 /* Async URL Timeout */
-global.DEFAULT_ASYNC_REQUEST_TIMEOUT = 30 * 1000;
+global.DEFAULT_ASYNC_REQUEST_TIMEOUT = 300 * 1000; /* 5 Minutes */
 /* 8 seconds */
 global.BGP_NODE_SUMMARY_GET_TIMEOUT = 5 * 1000;
 /* 5 Seconds */
@@ -339,9 +367,13 @@ global.CONTRAIL_LOGIN_ERROR = 'ContrailLoginError';
 global.KEYSTONE_V3_DEFAULT_DOMAIN = 'default';
 global.KEYSTONE_V2_DEFAULT_DOMAIN = 'default-domain';
 global.KEYSTONE_V3_TOKEN_URL = '/v3/auth/tokens';
+global.keystoneServiceListByProject = ['compute'];
 
 /* vCenter Config */
 global.VCENTER_SDK_PATH = '/sdk';
 global.VCENTER_WSDL = 'webroot/js/vim.wsdl';
+
+/* Async map limit Count */
+global.ASYNC_MAP_LIMIT_COUNT = 100;
 
 module.exports = global;

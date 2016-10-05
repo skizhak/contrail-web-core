@@ -29,6 +29,7 @@ var commonUtils = module.exports,
     v4 = require('ipv6').v4,
     v6 = require('ipv6').v6;
     contrailPath = '/contrail',
+    _ = require('underscore'),
     redisUtils = require('./redis.utils');
 
 if (!module.parent) {
@@ -36,8 +37,6 @@ if (!module.parent) {
                          messages.warn.invalid_mod_call, module.filename));
     process.exit(1);
 }
-
-var parser = new xml2js.Parser();
 
 var redisClientCreateEvent = new eventEmitter();
 
@@ -148,7 +147,7 @@ function getJsonViaInternalApi (api, ignoreError, url, callback)
     }
 };
 
-function retrieveSandeshIpUrl (url, apiServer)
+function retrieveSandeshIpUrl (url, apiServer, isRawData)
 {
     try {
         var serverObj = {};
@@ -159,7 +158,9 @@ function retrieveSandeshIpUrl (url, apiServer)
         pos = subStr.indexOf('@');
         var serverPort = subStr.substr(0, pos);
         url = subStr.slice(pos + 1);
-        apiServer = apiServer({apiName:global.SANDESH_API, server:serverIp, port:serverPort });
+        apiServer =
+            apiServer({apiName:global.SANDESH_API, server:serverIp,
+                      port:serverPort, isRawData: isRawData });
         serverObj['apiServer'] = apiServer;
         serverObj['newUrl'] = url;
         return serverObj;
@@ -182,9 +183,15 @@ function doEnsureExecution (func, timeout, args, thisObj)
     return run;
 }
 
-function getDataFromSandeshByIPUrl (apiServer, ignoreError, reqTimeout, url,
+function getDataFromSandeshByIPUrl (apiServer, ignoreError, params, url,
                                     callback)
 {
+    var reqTimeout = null;
+    var isRawData = false;
+    if (null != params) {
+        reqTimeout = params['reqTimeout'];
+        isRawData = params['isRawData'];
+    }
     var oldUrl = url, oldCallback = callback;
     if (typeof oldUrl === 'undefined' || typeof oldCallback === 'undefined') {
         if (null == reqTimeout) {
@@ -192,7 +199,8 @@ function getDataFromSandeshByIPUrl (apiServer, ignoreError, reqTimeout, url,
         }
         if (ignoreError) {
             return function (newUrl, newCallback) {
-                var serverObj = retrieveSandeshIpUrl(newUrl, apiServer);
+                var serverObj = retrieveSandeshIpUrl(newUrl, apiServer,
+                                                     isRawData);
                 if (serverObj == null) {
                     newCallback(null, null);
                 } else {
@@ -210,11 +218,12 @@ function getDataFromSandeshByIPUrl (apiServer, ignoreError, reqTimeout, url,
             }
         } else {
             return function (newUrl, newCallback) {
-                var serverObj = retrieveSandeshIpUrl(newUrl, apiServer);
+                var serverObj = retrieveSandeshIpUrl(newUrl, apiServer,
+                                                     isRawData);
                 if (null == serverObj) {
                     var error = new
                         appErrors.RESTServerError(util.format(messages.error.invalid_url,
-                                                              serverObj.newUrl)); 
+                                                              serverObj.newUrl));
                     newCallback(error, '');
                 } else {
                     serverObj.apiServer.api.get(serverObj.newUrl, doEnsureExecution(function (error, jsonData) {
@@ -228,11 +237,11 @@ function getDataFromSandeshByIPUrl (apiServer, ignoreError, reqTimeout, url,
             };
         }
     } else {
-        var serverObj = retrieveSandeshIpUrl(url, apiServer);
+        var serverObj = retrieveSandeshIpUrl(url, apiServer, isRawData);
         if (null == serverobj) {
             var error = new
                     appErrors.RESTServerError(util.format(messages.error.invalid_url,
-                                                          serverObj.newUrl)); 
+                                                          serverObj.newUrl));
                     newCallback(error, '');
         } else {
             if (null == reqTimeout) {
@@ -262,14 +271,18 @@ function getDataFromSandeshByIPUrl (apiServer, ignoreError, reqTimeout, url,
  * @param {Object} HTTP Response
  * @param {Object} Result JSON
  */
-function handleJSONResponse (error, res, json)
+function handleJSONResponse (error, res, json, isJson)
 {
     if ((res.req) && (true == res.req.invalidated)) {
         /* Req timed out, we already sent the response */
         return;
     }
 	if (!error) {
-		res.json(global.HTTP_STATUS_RESP_OK, json);
+        if ((null == isJson) || (true == isJson)) {
+            res.json(global.HTTP_STATUS_RESP_OK, json);
+        } else {
+            res.send(global.HTTP_STATUS_RESP_OK, json);
+        }
 	} else {
 		logutils.logger.error(error.stack);
 		if (error.custom) {
@@ -316,14 +329,14 @@ function getCurrentTimestamp ()
 
 /** Returns network IP Address List
 */
-function getIPAddressList() 
+function getIPAddressList()
 {
     var addressList = [];
     var interfaces = os.networkInterfaces();
     for (var devName in interfaces) {
         var iface = interfaces[devName];
         var ln = iface.length;
-        for (var i = 0; i < ln; i++) { 
+        for (var i = 0; i < ln; i++) {
             addressList.push(iface[i].address);
         }
     }
@@ -341,7 +354,7 @@ function isLocalAddress(ad)
                 return true;
             } 		
         }
-    } 
+    }
     return false;
 }
 
@@ -448,9 +461,9 @@ function localDirectoryListing(dir, res, callback)
     });
 }
 
-function handleError(method, res, e) 
+function handleError(method, res, e)
 {
-    var err = new appErrors.RESTServerError(method + ' failed : ' + e.message); 
+    var err = new appErrors.RESTServerError(method + ' failed : ' + e.message);
     logutils.logger.debug('IN ' + method + '() ' + 'error: ' + e);
     handleJSONResponse(err, res, null);
 }
@@ -476,7 +489,7 @@ function getBytes(n){
         o = n[0] * 1073741824;		
     }else if(n.indexOf('M') != -1) {
         n = n.split('M');
-        o = n[0] * 1048576; 
+        o = n[0] * 1048576;
     }else if(n.indexOf('K') != -1) {
         n = n.split('K');
         o = n[0] * 1024;
@@ -493,7 +506,7 @@ function remoteDirectoryListing(dir, input, res, callback)
             if(err) {
                 handleError('remoteDirectoryListing', res, err);
                 return;
-            } 
+            }
             var actList = [];
             sftp.opendir(dir, function readdir(err, handle) {
                 if(err) {
@@ -511,7 +524,7 @@ function remoteDirectoryListing(dir, input, res, callback)
                             var fullPath = dir + '/' + fileName;
                             var fileSize = formatFileSize(list[i].attrs.size);
                             actList.push({"name":fullPath,"size":fileSize});
-                        }			   
+                        }			
                     }
                     c.end();
                     callback(err, actList);					
@@ -540,7 +553,7 @@ function excludeDirectories (r)
         if(name.indexOf('.') == -1) {
             i = getIndex(r, name);
             r.splice(i,1);
-        } 
+        }
     }
 }
 
@@ -552,7 +565,7 @@ function directory (req, res, appData)
         var userName = reqData['userName'];
         var passWord = reqData['passWord'];
         var hostIPAddress = reqData["hostIPAddress"];
-        //read the log directory from the config 
+        //read the log directory from the config
         var remoteDir = downloadPath;
         if(isLocalAddress(hostIPAddress)) {
             localDirectoryListing(remoteDir, res, function(err, list) {
@@ -569,11 +582,11 @@ function directory (req, res, appData)
                         if(childList.length > 0) {
                             finalList = list.concat(childList);
                         }
-                        handleJSONResponse(childErr, res, finalList); 
+                        handleJSONResponse(childErr, res, finalList);
                     });
                 }
             });
-             
+
         }else {
             var input = {'hostIP' : hostIPAddress, 'userName' : userName, 'passWord' : passWord};
             remoteDirectoryListing(remoteDir, input, res, function(err,list) {
@@ -584,10 +597,10 @@ function directory (req, res, appData)
                 if(list.length > 0) {
                     excludeDirectories(list);
                     //get contrail logs
-                    remoteDir = remoteDir + contrailPath; 
+                    remoteDir = remoteDir + contrailPath;
                     remoteDirectoryListing(remoteDir, input, res ,function(err,childList) {
                         var finalList = list;
-                        if(childList.length > 0) { 
+                        if(childList.length > 0) {
                             finalList = list.concat(childList);
                         }
                         handleJSONResponse(err, res, finalList);
@@ -596,10 +609,10 @@ function directory (req, res, appData)
             });
         }
     }catch(e) {
-        var err = new appErrors.RESTServerError("directoryListing failed : " + e.message); 
+        var err = new appErrors.RESTServerError("directoryListing failed : " + e.message);
         logutils.logger.debug('IN directory() ' + 'error: ' + e);		
         handleJSONResponse(err, res, null);
-    }  
+    }
 }
 
 /**Download API for the log file downloading feature
@@ -608,13 +621,13 @@ function download (req, res, appData)
 {
     try {
         //read the inputs
-        var fileName = req.param('file'); 
+        var fileName = req.param('file');
         var userName = req.param('userName');
         var passWord = req.param('passWord');
         var hostIPAddress = req.param("hostIPAddress");
         var fileSize = req.param('size');
-  
-        //read the log directory from the config 
+
+        //read the log directory from the config
         var localDir = ((config.files) && (config.files.download_path)) ?
             config.files.download_path : global.DFLT_UPLOAD_PATH;
         //var remoteDir = downloadPath;
@@ -651,7 +664,7 @@ function download (req, res, appData)
         }
     }
     catch(e) {
-        var err = new appErrors.RESTServerError("Download failed : " + e.message); 
+        var err = new appErrors.RESTServerError("Download failed : " + e.message);
         logutils.logger.debug('IN download() ' + 'error: ' + e);		
         handleJSONResponse(err, res, null);
     }
@@ -706,9 +719,9 @@ function adjustDate (dt,obj)
 /* Function: getSafeDataToJSONify
     While parsing the data from the response got from backend server, use this function
     to get the data, if input data is null, then a default value (N/A) is returned
-  
+
     @param {data} response data object
- */  
+ */
 function getSafeDataToJSONify (data)
 {
     if (null == data) {
@@ -815,7 +828,7 @@ function callRestAPI (serverObj, dataObj, ignoreError, callback)
             doPostJsonCb(reqUrl, err, ignoreError, jsonData, callback);
         }, headers);
     } else if (global.HTTP_REQUEST_DEL == method) {
-        serverObj.apiDelele(reqUrl, appData, function(err, jsonData) {
+        serverObj.apiDelete(reqUrl, appData, function(err, jsonData) {
             doPostJsonCb(reqUrl, err, ignoreError, jsonData, callback);
         }, headers);
     } else {
@@ -831,17 +844,17 @@ function callRestAPI (serverObj, dataObj, ignoreError, callback)
  * @param {dataObj} Object to store the data.
     It is Object with the below data:
     dataObj = {
-        reqUrl: (mandatory) URL which needs to be sent to the server 
+        reqUrl: (mandatory) URL which needs to be sent to the server
         data: (Optional) If Any data needs to be sent, it is applicable for only
               put and post type request method.
         headers: (Optional) headers if any need to be provided
-        method: (Optional if Request Type is GET) Request type, 
+        method: (Optional if Request Type is GET) Request type,
                 type is either get, post, put or delete,
         serverObj: (Optional) server where the request needs to be sent.
-                Note, if this API is called as part async processing function, 
+                Note, if this API is called as part async processing function,
                 and serverObj if used, then this serverObj the request is sent to.
                 This is per reqUrl, if this API is used as part of async processing function,
-                then dataObj['serverObj'] gets priority over serverObj passed as 1st argument 
+                then dataObj['serverObj'] gets priority over serverObj passed as 1st argument
                 of this API.
     }
  * @param {callback} Callback Function
@@ -876,7 +889,7 @@ function getServerResponseByRestApi (serverObj, ignoreError, dataObj, callback)
         return function (newDataObj, newCallback) {
             callRestAPI((newDataObj['serverObj']) ? newDataObj['serverObj'] : serverObj,
                          newDataObj, ignoreError, newCallback);
-        }  
+        }
     } else {
         callRestAPI((dataObj['serverObj']) ? dataObj['serverObj'] : serverObj,
                     dataObj, ignoreError, callback);
@@ -950,19 +963,19 @@ function long2ip (ipl)
  * 1. This function is used to create formatted Object from the sandesh
  *    response
  */
-function createJSONBySandeshResponse (resultObj, responseObj) 
+function createJSONBySandeshResponse (resultObj, responseObj)
 {
     for (var key in responseObj) {
         try {
-            resultObj[key] = 
+            resultObj[key] =
                 getSafeDataToJSONify(responseObj[key][0]['_']);
         } catch(e) {
             resultObj[key] = responseObj[key];
-        }    
-    }    
+        }
+    }
 }
 
-/** 
+/**
  * Function: createJSONBySandeshResponseArr
  * public function
  * 1. This function is used to create formatted Object Array from the Sandesh
@@ -972,14 +985,14 @@ function createJSONBySandeshResponse (resultObj, responseObj)
  */
 function createJSONBySandeshResponseArr (resultArr, responseArr, lastIndex)
 {
-    var j = 0; 
+    var j = 0;
     try {
         var respCnt = responseArr.length;
         for (var i = 0; i < respCnt; i++) {
             j = i + lastIndex;
             resultArr[j] = {};
             commonUtils.createJSONBySandeshResponse(resultArr[j], responseArr[i]);
-        }    
+        }
         return (j + 1);
     } catch(e) {
         return 0;
@@ -1008,7 +1021,7 @@ function createJSONByUVEResponse (resultObj, responseObj)
     return resultObj;
 }
 
-/** 
+/**
  * Function: createJSONByUVEResponseArr
  * public function
  * 1. This function is used to create formatted Object Array from the UVE
@@ -1024,7 +1037,7 @@ function createJSONByUVEResponseArr (resultArr, responseArr, lastIndex)
         for (var i = 0; i < respCnt; i++) {
             j = i + lastIndex;
             resultArr[j] = {};
-            resultArr[j] = 
+            resultArr[j] =
                 commonUtils.createJSONByUVEResponse(resultArr[j], responseArr[i]);
         }
         return (j + 1);
@@ -1035,7 +1048,7 @@ function createJSONByUVEResponseArr (resultArr, responseArr, lastIndex)
     }
 }
 
-/** 
+/**
  * Function: getRestAPIServer
  * public function
  * 1. This function is used to get instance of rest API. If the response is in
@@ -1043,37 +1056,20 @@ function createJSONByUVEResponseArr (resultArr, responseArr, lastIndex)
  *    which ignores all XML attributes and only creates text nodes
  */
 function getRestAPIServer (ip, port, apiName) {
-    var api = apiName || global.label.API_SERVER;
-    return rest.getAPIServer({apiName: api, server:ip, port: port,
+    return rest.getAPIServer({apiName: apiName, server:ip, port: port,
                              xml2jsSettings:
                                 {ignoreAttrs: true,
                                  explicitArray: false
                                 }});
 }
 
-function getWebUIRedisDBIndex () 
+function getWebUIRedisDBIndex ()
 {
     var dbIndex = config.redisDBIndex;
     if (null == dbIndex) {
         dbIndex = global.WEBUI_DFLT_REDIS_DB;
     }
     return dbIndex;
-}
-
-function createRedisClient (redisDBIndex, callback) 
-{
-    var uiDB;
-    var server_port = (config.redis_server_port) ?
-        config.redis_server_port : global.DFLT_REDIS_SERVER_PORT;
-    var server_ip = (config.redis_server_ip) ?
-        config.redis_server_ip : global.DFLT_REDIS_SERVER_IP;
-    if (typeof redisDBIndex === 'function') {
-        uiDB = getWebUIRedisDBIndex();
-        callback = redisDBIndex;
-    } else {
-        uiDB = redisDBIndex;
-    }
-    redisUtils.createRedisClientAndWait(server_port, server_ip, uiDB, callback);
 }
 
 /* Function: flushRedisDB
@@ -1085,8 +1081,9 @@ function flushRedisDB (redisDB, callback)
         config.redis_server_port : global.DFLT_REDIS_SERVER_PORT;
     var server_ip = (config.redis_server_ip) ?
         config.redis_server_ip : global.DFLT_REDIS_SERVER_IP;
-    var redisClient = redis.createClient(server_port,
-        server_ip);
+    var redisClient = redis.createClient(server_port, server_ip);
+    var redisUtils = require('./redis.utils');
+    redisUtils.subscribeToRedisEvents(redisClient);
     redisClient.select(redisDB, function(err, res) {
         if (null != err) {
             logutils.logger.error("Redis DB " + redisDB + " SELECT failed");
@@ -1141,7 +1138,7 @@ function parseUVEObjectData (result, data)
             if (result[key] == '#text') {
                 continue;
             }
-            result[key] = 
+            result[key] =
                 commonUtils.createJSONByUVEResponse(result[key],
                                                     data[key]);
         }
@@ -1191,7 +1188,7 @@ function parseUVEListData (uveData)
 
 function getApiPostData (url, postData)
 {
-    /* Cloud Stack API Service expects the post data to be in JSON.parse format, 
+    /* Cloud Stack API Service expects the post data to be in JSON.parse format,
        whereas, other Contrail API Servers expect the data in JSON.stringify
        format.
      */
@@ -1207,15 +1204,15 @@ function getApiPostData (url, postData)
 function redirectToLogout (req, res, callback)
 {
     //If URL has '/vcenter',then redirect to /vcenter/logout
-    //x-orchestrationmode is set only for ajax requests,so if user changes browser URL then we need to check for loggedInOrchestrationMode 
+    //x-orchestrationmode is set only for ajax requests,so if user changes browser URL then we need to check for loggedInOrchestrationMode
     if(req.headers['x-orchestrationmode'] != null && req.headers['x-orchestrationmode'] == 'vcenter') {
-        redURL = '/vcenter/logout';
+        redURL = '/vcenter';
     } else if(req.headers['x-orchestrationmode'] != null && req.headers['x-orchestrationmode'] == 'none') {
-        redURL = '/logout';
+        redURL = '/';
     } else if(req['originalUrl'].indexOf('/vcenter') > -1) {
-        redURL = '/vcenter/logout';
+        redURL = '/vcenter';
     } else {
-        redURL = '/logout';
+        redURL = '/';
     }
     redirectToURL(req, res, redURL);
     if (null != callback) {
@@ -1226,13 +1223,13 @@ function redirectToLogout (req, res, callback)
 function redirectToLogin (req, res)
 {
     if(req.headers['x-orchestrationmode'] != null && req.headers['x-orchestrationmode'] == 'vcenter') {
-        redURL = '/vcenter/login';
+        redURL = '/vcenter';
     } else if(req.headers['x-orchestrationmode'] != null && req.headers['x-orchestrationmode'] == 'none') {
-        redURL = '/login';
+        redURL = '/';
     } else if(req['originalUrl'].indexOf('/vcenter') > -1) {
-        redURL = '/vcenter/login';
+        redURL = '/vcenter';
     } else {
-        redURL = '/login';
+        redURL = '/';
     }
     redirectToURL(req, res, redURL);
 }
@@ -1242,9 +1239,29 @@ function redirectToURL(req, res, redURL)
     var ajaxCall = req.headers['x-requested-with'];
     if (ajaxCall == 'XMLHttpRequest') {
        res.setHeader('X-Redirect-Url', redURL);
-       res.send(307, '');
+       var userAgent = req.headers['user-agent'];
+       if (null == userAgent) {
+           /* We must not come here */
+           logutils.logger.error("We did not find user-agent in req header");
+           res.send(307, '');
+           return;
+       }
+       if ((-1 != userAgent.indexOf('MSIE')) ||
+           (-1 != userAgent.indexOf('Trident')) ||
+           (-1 != userAgent.indexOf('Edge'))) {
+           /* In IE/Edge Browser, response code 307, does not lead the browser to
+            * redirect to certain URL, so sending 200 responseCode
+            */
+           res.send(200, '');
+       } else {
+           res.send(307, '');
+       }
     } else {
-       res.redirect(redURL);
+       if ("/" == redURL) {
+            res.sendfile('webroot/html/dashboard.html');
+            return;
+       } 
+       res.redirect(302, redURL);
     }
 }
 
@@ -1298,7 +1315,7 @@ function readFileAndChangeContent (path, originalStr, changeStr, callback)
 function changeFileContentAndSend (response, path, originalStr, changeStr, callback)
 {
     var errStr = "";
-    readFileAndChangeContent(path, originalStr, changeStr, 
+    readFileAndChangeContent(path, originalStr, changeStr,
                              function(err, content) {
         if (null != err) {
             response.writeHead(global.HTTP_STATUS_INTERNAL_ERROR);
@@ -1326,6 +1343,25 @@ function getOrchestrationPluginModel (req, res, appData)
     commonUtils.handleJSONResponse(null, res, modelObj);
 }
 
+/**
+ * Returns a dict of enabled feature pkgs
+ */
+function getFeaturePkgs() {
+    var featurePkg={};
+    var pkgList = process.mainModule.exports['pkgList'];
+    var pkgLen = pkgList.length;
+    var activePkgs = [];
+    for (var i = 1; i < pkgLen; i++) {
+        activePkgs.push(pkgList[i]['pkgName']);
+    }
+    activePkgs = _.uniq(activePkgs);
+    var pkgCnt = activePkgs.length;
+    for (var i = 0; i < pkgCnt; i++) {
+        featurePkg[activePkgs[i]] = true;
+    }
+    return featurePkg;
+}
+
 /* Function: getWebServerInfo
    Req URL: /api/service/networking/web-server-info
    Send basic information about Web Server
@@ -1342,22 +1378,129 @@ function getWebServerInfo (req, res, appData)
         logutils.logger.error("We did not get Orchestration Model");
         assert(0);
     }
-    serverObj ['serverUTCTime'] = commonUtils.getCurrentUTCTime();
+    serverObj['serverUTCTime'] = commonUtils.getCurrentUTCTime();
     serverObj['hostName'] = os.hostname();
     serverObj['role'] = req.session.userRole;
     serverObj['featurePkg'] = {};
-    serverObj['uiConfig'] = ui; 
-    serverObj['loggedInOrchestrationMode'] = req.session.loggedInOrchestrationMode;
+    serverObj['uiConfig'] = ui;
+    serverObj['isAuthenticated'] = req.session.isAuthenticated;
+    serverObj['discoveryEnabled'] = getValueByJsonPath(config,
+                                                       'discoveryService;enable',
+                                                       true);
+    serverObj['configServer'] = {};
+    serverObj['configServer']['port'] = getValueByJsonPath(config,
+                                                    'cnfg;server_port',
+                                                     null);
+    serverObj['configServer']['ip'] = getValueByJsonPath(config,
+            'cnfg;server_ip',
+             null);
 
-    for (var key in featurePackages) {
-        serverObj['featurePkg'][key] = featurePackages[key]['enable'];
+    serverObj['optFeatureList'] = getValueByJsonPath(config,'optFeatureList',{});
+    serverObj['featurePkgsInfo'] = getValueByJsonPath(config,'featurePkg',[]);
+    serverObj['sessionTimeout'] = getValueByJsonPath(config,'session;timeout', 3600000);
+    serverObj['_csrf'] = req.session._csrf;
+    serverObj['serviceEndPointFromConfig'] =
+        (null != config.serviceEndPointFromConfig) ?
+        config.serviceEndPointFromConfig : true;
+    serverObj['regionList'] = getValueByJsonPath(req.session,'regionList');
+    serverObj['isRegionListFromConfig'] = config.regionsFromConfig;
+    var cgcData =
+        commonUtils.getValueByJsonPath(req,
+                                       'session;serviceCatalog;' +
+                                       global.REGION_ALL + ';' +
+                                       global.SERVICE_ENDPT_TYPE_CGC + ';maps;'
+                                       + 0, null, false);
+    var cgcIP =
+        commonUtils.getValueByJsonPath(cgcData, 'ip', null);
+    var cgcPort =
+        commonUtils.getValueByJsonPath(cgcData, 'port', null);
+    if ((null != cgcIP) && (null != cgcPort)) {
+        serverObj['cgcEnabled'] = true;
+    } else {
+        serverObj['cgcEnabled'] = false;
+    }
+    serverObj['configRegionList'] = config.regions;
+    if(serverObj['cgcEnabled'] == true)
+        serverObj['regionList'].unshift("All Regions");
+
+    var authApi = require('../common/auth.api');
+    serverObj['currentRegionName'] = authApi.getCurrentRegion(req);
+    var pkgList = process.mainModule.exports['pkgList'];
+    var pkgLen = pkgList.length;
+    var activePkgs = [];
+    for (var i = 1; i < pkgLen; i++) {
+        activePkgs.push(pkgList[i]['pkgName']);
+    }
+    /* It may happen that user has written same config multiple times in config
+     * file
+     */
+    activePkgs = _.uniq(activePkgs);
+
+    serverObj['loggedInOrchestrationMode'] = req.session.loggedInOrchestrationMode;
+    serverObj['insecureAccess'] = config.insecure_access;
+
+    var pkgCnt = activePkgs.length;
+    if (!pkgCnt) {
+        commonUtils.handleJSONResponse(null, res, serverObj);
+        return;
+    }
+    for (var i = 0; i < pkgCnt; i++) {
+        serverObj['featurePkg'][activePkgs[i]] = true;
     }
 
+    /* Return from here, we will get project token stored in
+     * req.session.tokenObjs by get-project-role API
+     */
     commonUtils.handleJSONResponse(null, res, serverObj);
+    return;
+
+    var project = req.param('project');
+    var tokenObjs = req.session.tokenObjs;
+    if ((null != tokenObjs) && (null != tokenObjs[project])) {
+        /* We already fetched */
+        commonUtils.handleJSONResponse(null, res, serverObj);
+        return;
+    }
+    var authApi = require('../common/auth.api');
+    var adminProjList = authApi.getAdminProjectList(req);
+    var tokenId = null;
+    if ((null != adminProjList) && (adminProjList.length > 0)) {
+        var adminProjCnt = adminProjList.length;
+        for (var i = 0; i < adminProjCnt; i++) {
+            if ((null != tokenObjs) && (null != tokenObjs[adminProjList[i]])) {
+                tokenId = getValueByJsonPath(tokenObjs[adminProjList[i]],
+                                             'token;id', null);
+                if (null != tokenId) {
+                    break;
+                }
+            }
+        }
+    }
+
+    var userObj = {'tokenid': tokenId, 'tenant': project, 'req': req};
+    authApi.getUIUserRoleByTenant(userObj, function(err, roles) {
+        if (null == roles) {
+            /* We did not find the project role, so redirect to login */
+            logutils.logger.error('We did not get the project in keystone or role' +
+                                  ' not assigned, redirecting to login.');
+            redirectToLogout(req, res);
+            return;
+        }
+        /* Do not update the role, we will enable it when RBAC is supported in
+         * API Server
+         */
+        /*
+        if ((null == err) && (null != roles)) {
+            serverObj['role'] = roles;
+        }
+        */
+        commonUtils.handleJSONResponse(null, res, serverObj);
+    });
 }
 
 function getUserRoleListPerTenant (req, res, callback)
 {
+    var authApi = require('../common/auth.api');
     var userRolesObj = {};
     var project = req.param('project');
     try {
@@ -1372,22 +1515,43 @@ function getUserRoleListPerTenant (req, res, callback)
         return;
     }
     if (null != project) {
-        try {
-            var roles = tokenObjs[project]['user']['roles'];
-        } catch(e) {
-            logutils.logger.error("Roles not found..Redirecting to login page");
-            redirectToLogout(req, res);
+        var roles =
+            commonUtils.getValueByJsonPath(tokenObjs[project],
+                                           'user;roles', null);
+        if (null != roles) {
+            var uiRoles = authApi.getUIRolesByExtRoles(req, roles);
+            userRolesObj[project] = uiRoles;
+            commonUtils.handleJSONResponse(null, res, userRolesObj);
             return;
         }
-        var uiRoles = authApi.getUIRolesByExtRoles(req, roles);
-        userRolesObj[project] = uiRoles;
-        commonUtils.handleJSONResponse(null, res, userRolesObj);
+        /* We did not find the project, so issue a new call to get the roles
+         */
+        var tokenObjs = req.session.tokenObjs;
+        for (key in tokenObjs) {
+            var tokenId = tokenObjs[key]['token']['id'];
+            break;
+        }
+        var userObj = {'tokenid': tokenId, 'tenant': project, 'req': req};
+        authApi.getExtUserRoleByTenant(userObj, function(error, tokenData) {
+            if ((null != error) || (null == tokenData)) {
+                logutils.logger.error("Roles not found.." +
+                                      "Redirecting to login page");
+                handleJSONResponse(null, req.res, {});
+                return;
+            }
+            roles = tokenData['roles'];
+            var uiRoles = authApi.getUIRolesByExtRoles(req, roles);
+            userRolesObj[project] = uiRoles;
+            handleJSONResponse(null, res, userRolesObj);
+        });
         return;
     }
+    /* Request for all tokens */
     for (var key in tokenObjs) {
-        try {
-            var roles = tokenObjs[key]['user']['roles'];
-        } catch(e) {
+        var roles =
+            commonUtils.getValueByJsonPath(tokenObjs[key],
+                                           'user;roles', null);
+        if (null == roles) {
             logutils.logger.error("Roles not found for project " +
                                   key + " ..Redirecting to login page");
             redirectToLogout(req, res);
@@ -1400,9 +1564,14 @@ function getUserRoleListPerTenant (req, res, callback)
 
 function mergeAllPackageList (serverType)
 {
+    var tmpPkgNameObjs = {};
     var pkgList = [];
     pkgList.push(require('../../../webroot/common/api/package.js').pkgList);
     for (key in config.featurePkg) {
+        if (null != tmpPkgNameObjs[key]) {
+            /* Already added, user has mistakenly added twice same config */
+            continue;
+        }
         if ((config.featurePkg[key]) && (config.featurePkg[key]['path']) &&
             ((null == config.featurePkg[key]['enable']) ||
              (true == config.featurePkg[key]['enable'])) &&
@@ -1410,6 +1579,7 @@ function mergeAllPackageList (serverType)
                                    '/webroot/common/api/package.js'))) {
             pkgList.push(require(config.featurePkg[key]['path'] +
                                  '/webroot/common/api/package.js').pkgList);
+            tmpPkgNameObjs[key] = true;
         }
     }
     logutils.logger.debug("Built Package List as:" + JSON.stringify(pkgList));
@@ -1418,6 +1588,8 @@ function mergeAllPackageList (serverType)
 
 function getAllJsons (menuDir, callback)
 {
+    var options = {attrkey: 'menuAttr'};
+    var parser = new xml2js.Parser(options);
     var fileName = menuDir + '/menu.xml';
     fs.readFile(fileName, function(err, content) {
         parser.parseString(content, function(err, content) {
@@ -1438,6 +1610,29 @@ function createEmptyResourceObj (obj)
     return obj['resources'];
 }
 
+function flattenResourceObjArr (resArr)
+{
+    var tmpResKeyArr = [];
+    var tmpResKeyObjs = {};
+    var len = resArr.length;
+    for (var i = 0; i < len; i++) {
+        tmpResKeyArr = [];
+        for (key in resArr[i]) {
+            tmpResKeyArr.push(key);
+        }
+        tmpResKeyArr.sort();
+        var keysLen = tmpResKeyArr.length;
+        var val = "";
+        val += tmpResKeyArr.join(':');
+        val += ":";
+        for (var j = 0; j < keysLen; j++) {
+            val += resArr[i][tmpResKeyArr[j]].join(':');
+        }
+        tmpResKeyObjs[tmpResKeyArr.join(':')] = {value: val, index: i};
+    }
+    return tmpResKeyObjs;
+}
+
 function mergeResourceObjs (obj1, obj2)
 {
     if (null == obj2['resources']) {
@@ -1446,6 +1641,15 @@ function mergeResourceObjs (obj1, obj2)
     if (null == obj1['resources']) {
         obj1['resources'] = createEmptyResourceObj(obj1);
     }
+    var resObjs1 = flattenResourceObjArr(obj1['resources'][0]['resource']);
+    var resObjs2 = flattenResourceObjArr(obj2['resources'][0]['resource']);
+    for (key in resObjs1) {
+        if ((null != resObjs2[key]) &&
+            (resObjs1[key]['value'] == resObjs2[key]['value'])) {
+            obj2['resources'][0]['resource'].splice(resObjs2[key].index, 1);
+        }
+    }
+
     obj1['resources'][0]['resource'] =
         obj1['resources'][0]['resource'].concat(obj2['resources'][0]['resource']);
     return obj1;
@@ -1587,7 +1791,7 @@ function mergeMenuObjects (menuObj1, menuObj2)
                         }
                     }
                     if (false == objFound) {
-                        items1.push(items2[i]); 
+                        items1.push(items2[i]);
                     }
                 }
                 break;
@@ -1600,12 +1804,34 @@ function mergeMenuObjects (menuObj1, menuObj2)
     return menuObj1;
 }
 
+var featurePkgToMenuNameMap = {
+    'webController': 'wc',
+    'webStorage': 'ws',
+    'serverManager': 'sm'
+};
+
 function mergeAllMenuXMLFiles (pkgList, mergePath, callback)
 {
-    var writeFile = mergePath + '/menu.xml';
+    var pkgLen = pkgList.length;
+    var featureArr = [];
+    var mFileName = 'menu.xml';
+
+    for (var i = 1; i < pkgLen; i++) {
+        /* i = 0; => contrail-web-core, so ignore this one */
+        var pkgName = pkgList[i]['pkgName'];
+        if (null != featurePkgToMenuNameMap[pkgName]) {
+            featureArr.push(featurePkgToMenuNameMap[pkgName]);
+        }
+    }
+    if (featureArr.length > 0) {
+        featureArr.sort();
+        mFileName = 'menu_' + featureArr.join('_') + '.xml';
+    }
+
+    var writeFile = mergePath + '/' + mFileName;
     var cmd = 'rm -f ' + writeFile;
     exec(cmd, function(error, stdout, stderr) {
-         mergeFeatureMenuXMLFiles(pkgList, mergePath, callback);
+         mergeFeatureMenuXMLFiles(pkgList, mergePath, mFileName, callback);
     });
 }
 
@@ -1688,23 +1914,23 @@ function customMenuChange (pkgList, resMenuObj)
     return resMenuObj;
 }
 
-function mergeFeatureMenuXMLFiles (pkgList, mergePath, callback)
+function mergeFeatureMenuXMLFiles (pkgList, mergePath, mFileName, callback)
 {
     var pkgDir = null;
     var pkgLen = pkgList.length;
     var menuDirs = [];
-    var writeFile = mergePath + '/menu.xml';
+    var writeFile = mergePath + '/' + mFileName;
 
     if (1 == pkgLen) {
         /* Only core package, nothing to do */
         callback();
         return;
     }
-    var pkgNames = jsonPath(pkgList, "$..name[0]");
+    /*
     if (2 == pkgLen) {
         pkgDir = config.featurePkg[pkgList[1]['pkgName']].path;
-        cmd = 'cp -af ' + pkgDir + '/webroot/menu.xml ' +
-            writeFile; 
+        cmd = 'cp -af ' + pkgDir + '/webroot/menu.xml' + ' ' +
+            writeFile;
         exec(cmd, function(error, stdout, stderr) {
             assert(error == null);
             callback();
@@ -1712,6 +1938,7 @@ function mergeFeatureMenuXMLFiles (pkgList, mergePath, callback)
         });
         return;
     }
+    */
     for (var i = 1; i < pkgLen; i++) {
         pkgDir = config.featurePkg[pkgList[i]['pkgName']].path;
         menuDirs.push(pkgDir + '/webroot/');
@@ -1811,12 +2038,283 @@ function prefixToNetMask(prefixLen) {
     return v4.Address.fromHex(parseInt(binaryString,2).toString(16)).address;
 }
 
+//To check if it's an IPv4 Address
+function isIPv4(ipAddr) {
+    return (new v4.Address(ipAddr)).isValid();
+}
+
+function isIPv6(ipAddr) {
+    return (new v6.Address(ipAddr)).isValid();
+}
+
+//Retruns the no of ip address in the range
+//@ ipRangeObj['start'] - Start address of range
+//@ ipRangeObj['end']   - End address of range
+function getIPRangeLen(ipRangeObj) {
+    if(isIPv4(ipRangeObj['start']) && isIPv4(ipRangeObj['end'])) {
+        return ((new v4.Address(ipRangeObj['end'])).bigInteger() - (new v4.Address(ipRangeObj['start'])).bigInteger()) + 1;
+    } else if(isIPv6(ipRangeObj['start']) && isIPv6(ipRangeObj['end'])) {
+        return ((new v6.Address(ipRangeObj['end'])).bigInteger() - (new v6.Address(ipRangeObj['start'])).bigInteger()) + 1;
+    } else
+        return 0;
+}
+
+function isSubArray (arr, subarr)
+{
+    var filteredSubarray = _.filter(subarr, function(subarrelement) {
+        return _.any(arr, function(arrelement){
+            return arrelement === subarrelement;
+        });
+    });
+    return _.isEqual(subarr, filteredSubarray);
+};
+
+
+/* Function: convertEdgelistToAdjList
+ *  This function is used to convert edge list to adjacency list in a graph
+ *
+ * Input:
+   ++++++
+    edgeList:
+    [
+        ["Rack2-DataSw","ex4500-1"],
+        ["Rack2-DataSw","Rack1-DataSw"],
+        ["Rack2-DataSw","nodeg35"],
+        ["ex4500-1","Rack2-DataSw"],
+        ["ex4500-1","Rack1-DataSw"],
+        ["Rack1-DataSw","Rack2-DataSw"],
+        ["Rack1-DataSw","ex4500-1"],
+        ["Rack1-DataSw","nodea29"],
+        ["bb8056fc","nodeg35"],
+        ["ea213e4f","nodea29"],
+        ["31e27d4c","nodeg35"]
+    ];
+    Output:
+    +++++++
+    {
+        "Rack2-DataSw": ['ex4500-1', 'Rack1-DataSw','nodeg35'],
+        "ex4500-1": ['Rack2-DataSw','Rack1-DataSw'],
+        'Rack1-DataSw': ['Rack2-DataSw', 'ex4500-1', 'nodea29'],
+        'nodeg35': ['Rack2-DataSw', 'bb8056fc', '31e27d4c'],
+        'nodea29': ['Rack1-DataSw','ea213e4f'],
+        'bb8056fc': ['nodeg35'],
+        'ea213e4f': ['nodea29'],
+        '31e27d4c': ['nodeg35']
+    };
+ */
+function convertEdgelistToAdjList (edgeList)
+{
+    var adjList = {};
+    var len = edgeList.length;
+    var  pair, u, v;
+    for (i = 0; i < len; i++) {
+        pair = edgeList[i];
+        u = pair[0];
+        v = pair[1];
+        if (adjList[u]) {
+            // append vertex v to edgeList of vertex u
+            adjList[u].push(v);
+        } else {
+            // vertex u is not in adjList, create new adjacency list for it
+            adjList[u] = [v];
+        }
+        if (adjList[v]) {
+            adjList[v].push(u);
+        } else {
+            adjList[v] = [u];
+        }
+    }
+    for (key in adjList) {
+        adjList[key] = _.uniq(adjList[key]);
+    }
+    return adjList;
+}
+
+/* Function: findAllPathsInEdgeGraph
+ *  This function is used to do breadth-first-search on graph to find all
+ *  possible paths from source to dest
+ * Ex:
+    Input:
+    ++++++
+    graph:
+    [
+        ["Rack2-DataSw","ex4500-1"],
+        ["Rack2-DataSw","Rack1-DataSw"],
+        ["Rack2-DataSw","nodeg35"],
+        ["ex4500-1","Rack2-DataSw"],
+        ["ex4500-1","Rack1-DataSw"],
+        ["Rack1-DataSw","Rack2-DataSw"],
+        ["Rack1-DataSw","ex4500-1"],
+        ["Rack1-DataSw","nodea29"],
+        ["bb8056fc","nodeg35"],
+        ["ea213e4f","nodea29"],
+        ["31e27d4c","nodeg35"]
+    ];
+    source: 31e27d4c
+    dest: ea213e4f
+    Output:
+    +++++++
+    [
+        [ '31e27d4c', 'nodeg35', 'Rack2-DataSw', 'ex4500-1', 'Rack1-DataSw',
+            'nodea29', 'ea213e4f']
+        [ '31e27d4c', 'nodeg35', 'Rack2-DataSw', 'Rack1-DataSw', 'nodea29',
+            'ea213e4f']
+    ]
+ */
+function findAllPathsInEdgeGraph (graph, source, dest)
+{
+    graph = convertEdgelistToAdjList(graph);
+    var validPaths = [];
+    var tmpNodeArr = [];
+    var tempPath = [source];
+    tmpNodeArr.push(tempPath);
+    while (tmpNodeArr.length != 0) {
+        var tmpPath = tmpNodeArr[0];
+        if (1 == tmpNodeArr.length) {
+            tmpNodeArr = [];
+        } else {
+            tmpNodeArr.splice(0, 1);
+        }
+
+        var lastNode = tmpPath[tmpPath.length - 1];
+        if (lastNode == dest) {
+            validPaths.push(tmpPath);
+        }
+        if (null == graph[lastNode]) {
+            return [];
+        }
+        var graphLastNodeLen = graph[lastNode].length;
+        for (var i = 0; i < graphLastNodeLen; i++) {
+            var linkNode = graph[lastNode][i];
+            if (-1 == tmpPath.indexOf(linkNode)) {
+                var newPath = tmpPath.concat([linkNode]);
+                tmpNodeArr.push(newPath);
+            }
+        }
+    }
+    return validPaths;
+}
+
+/**
+ * Get the value of a property inside a json object with a given path
+ */
+function getValueByJsonPath(obj,pathStr,defValue,doClone) {
+    try {
+        var currObj = obj;
+        var pathArr = pathStr.split(';');
+        var doClone = (doClone == null)? true : doClone;
+        var arrLength = pathArr.length;
+        for(var i=0;i<arrLength;i++) {
+            if(currObj[pathArr[i]] != null) {
+                currObj = currObj[pathArr[i]];
+            } else
+                return defValue;
+        }
+        if(!doClone) {
+            return currObj;
+        }
+        if(currObj instanceof Array)
+            return cloneObj(currObj);
+        else if(typeof(currObj) == "object")
+            return cloneObj(currObj);
+        else
+            return currObj;
+    } catch(e) {
+        return defValue;
+    }
+}
+
+/*
+ * Filter keys in given json object recursively whose value matches with null
+ */
+function filterJsonKeysWithNullValues(obj) {
+    if(typeof(obj) instanceof Array) {
+        for(var i=0,len=obj.length;i<len;i++) {
+            obj[i] = filterJsonKeysWithNullValues(obj[i]);
+        }
+    } else if(typeof(obj) == "object") {
+        for(var key in obj) {
+            if(obj[key] == null) {
+                delete obj[key];
+            } else if(typeof(obj[key]) == "object") {
+                obj[key] = filterJsonKeysWithNullValues(obj[key]);
+            }
+        }
+    }
+    return obj;
+}
+
+function doDeepSort (object)
+{
+    if (null == object) {
+        return object;
+    }
+    var sortedObj = {};
+    var keys = Object.keys(object);
+
+    keys.sort(function(key1, key2){
+        if (key1 > key2) {
+            return 1;
+        } else if (key1 < key2) {
+            return -1;
+        }
+        return 0;
+    });
+
+    for (var index in keys) {
+        var key = keys[index];
+        if ((typeof object[key] == 'object') &&
+            (!(object[key] instanceof Array))) {
+            sortedObj[key] = doDeepSort(object[key]);
+        } else {
+            sortedObj[key] = object[key];
+        }
+    }
+    if (object instanceof Array) {
+        var resultArr = [];
+        for (var key in sortedObj) {
+            resultArr.push(sortedObj[key]);
+        }
+        return resultArr;
+    }
+    return sortedObj;
+}
+
+function invalidateReqSession (req, res)
+{
+    req.session.isAuthenticated = false;
+    res.clearCookie('_csrf');
+    res.clearCookie('connect.sid');
+}
+
+function handleAuthToAuthorizeError(err, req, callback)
+{
+    var error;
+    if (err.responseCode === global.HTTP_STATUS_AUTHORIZATION_FAILURE) {
+        error = new appErrors.RESTServerError("Permission Denied");
+        error.responseCode = global.HTTP_STATUS_FORBIDDEN;
+    } else {
+        error = err;
+    }
+
+    if(error.responseCode === global.HTTP_STATUS_FORBIDDEN) {
+        if(callback) {
+            callback(error, null);
+        } else {
+            handleJSONResponse(error, req.res, null);
+            return;
+        }
+    } else {
+        redirectToLogout(req, req.res);
+    }
+}
+
+exports.filterJsonKeysWithNullValues = filterJsonKeysWithNullValues;
 exports.createJSONBySandeshResponseArr = createJSONBySandeshResponseArr;
 exports.createJSONBySandeshResponse = createJSONBySandeshResponse;
 exports.createJSONByUVEResponse = createJSONByUVEResponse;
 exports.createJSONByUVEResponseArr = createJSONByUVEResponseArr;
 exports.getRestAPIServer = getRestAPIServer;
-exports.createRedisClient = createRedisClient;
 exports.flushRedisDB = flushRedisDB;
 exports.redisClientCreateEvent = redisClientCreateEvent;
 exports.getWebUIRedisDBIndex = getWebUIRedisDBIndex;
@@ -1865,3 +2363,12 @@ exports.getWebConfigValueByName = getWebConfigValueByName;
 exports.isMultiTenancyEnabled = isMultiTenancyEnabled;
 exports.prefixToNetMask = prefixToNetMask;
 exports.convertApiServerUUIDtoKeystoneUUID = convertApiServerUUIDtoKeystoneUUID;
+exports.getIPRangeLen = getIPRangeLen;
+exports.findAllPathsInEdgeGraph = findAllPathsInEdgeGraph;
+exports.isSubArray = isSubArray;
+exports.getValueByJsonPath = getValueByJsonPath;
+exports.getFeaturePkgs = getFeaturePkgs;
+exports.doDeepSort = doDeepSort;
+exports.invalidateReqSession = invalidateReqSession;
+exports.handleAuthToAuthorizeError = handleAuthToAuthorizeError;
+

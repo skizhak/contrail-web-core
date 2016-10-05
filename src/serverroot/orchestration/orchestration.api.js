@@ -24,8 +24,17 @@ function getOrchestrationModels ()
 
 var associatedOrchModels = ['vcenter'];
 
-function getOrchestrationModelsByReqURL (reqURL)
+function getOrchestrationModelsByReqURL (reqURL, req)
 {
+    /* For logout in vcenter, we send only /logout, so if vcenter or not, check
+     * the referer header in req objct
+     */
+    if (null != req) {
+        var referer = req.headers['referer'];
+        if ((null != referer) && (-1 != referer.indexOf('/vcenter'))) {
+            reqURL = '/vcenter';
+        }
+    }
     var model = 'openstack';
     var orchModels = getOrchestrationModels();
     console.log("orchModels as:", orchModels);
@@ -47,6 +56,13 @@ function getOrchestrationModelsByReqURL (reqURL)
     return model;
 }
 
+function getLoggedInOrchestrationMode (req)
+{
+    var commonUtils = require('../utils/common.utils');
+    return commonUtils.getValueByJsonPath(req, 'session;loggedInOrchestrationMode',
+                                          'openstack', false);
+}
+
 exports.getOrchestrationModels = getOrchestrationModels;
 exports.getOrchestrationModelsByReqURL = getOrchestrationModelsByReqURL;
-
+exports.getLoggedInOrchestrationMode = getLoggedInOrchestrationMode;

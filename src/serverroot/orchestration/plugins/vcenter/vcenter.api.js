@@ -4,7 +4,7 @@
 
 var vCenterApi = require('../../../common/vcenter.api'),
     configApiServer = require('../../../common/configServer.api'),
-    config = require('../../../../../config/config.global'),
+    config = process.mainModule.exports["config"],
     logutils = require('../../../utils/log.utils');
 var commonUtils = require('../../../utils/common.utils');
 var async = require('async');
@@ -12,8 +12,13 @@ var Promise = require('promise');
 var deferred = require('deferred');
 var dataCenterName = null;
 var vSwitchName = null;
+var rootFolder = null;
+var networkFolder = null;
 var dataCenterDef = deferred();
 var vSwitchDef = deferred();
+var mobCache = {
+    'DistributedVirtualPortgroup' : {}
+}
 
 function logout(appData) {
     return new Promise(function(resolve,reject) {
@@ -59,7 +64,25 @@ function queryIpPools(appData) {
                     }
                 }
             },appData,function(err,data,resHeaders) {
-                resolve(data);
+                var ipPoolsList = [];
+                var ipPoolMap = {};
+                //If there exists more than ip-pool on given datacenter
+                if(data['QueryIpPoolsResponse'] instanceof Array) {
+                    ipPoolsList = data['QueryIpPoolsResponse'][0]['_value']['returnval'];
+                } else if(data['QueryIpPoolsResponse']['_value'] == '') {
+                    //If there doesn't exist any ip-pools
+                    resolve(ipPoolMap);
+                    return;
+                } else
+                    ipPoolsList = data['QueryIpPoolsResponse']['returnval'];
+                //If only one entity is present,wrap it in an array 
+                if(!(ipPoolsList instanceof Array)) 
+                    ipPoolsList = [ipPoolsList];
+                //Create a map with ip-pool name as key and id as value
+                for(var i=0;i<ipPoolsList.length;i++) {
+                    ipPoolMap[ipPoolsList[i]['name']] = ipPoolsList[i]['id'];
+                }
+                resolve(ipPoolMap);
             });
         });
     });
@@ -67,39 +90,43 @@ function queryIpPools(appData) {
 
 function destroyIpPool(appData,poolId) {
     return new Promise(function(resolve,reject) {
-        populatevCenterParams(appData).done(function(response) {
-            vCenterApi.doCall({
-            method    : 'DestroyIpPool',
-            headers : {
-                SOAPAction: "urn:vim25/5.1"
-            },
-            params : {
-                _this : {
-                    _attributes : {
-                        type: 'IpPoolManager'
-                    },
-                    _value : 'IpPoolManager'
+        if(poolId == null) {
+            resolve({});
+        } else {
+            populatevCenterParams(appData).done(function(response) {
+                vCenterApi.doCall({
+                method    : 'DestroyIpPool',
+                headers : {
+                    SOAPAction: "urn:vim25/5.1"
                 },
-                dc: {
-                    _attributes: {
-                        type:'Datacenter'
+                params : {
+                    _this : {
+                        _attributes : {
+                            type: 'IpPoolManager'
+                        },
+                        _value : 'IpPoolManager'
                     },
-                    _value: dataCenterName
-                },
-                id: poolId, //Get it from QueryIpPools
-                force: false
-            }
-            },appData,function(err,data,resHeaders) {
-                resolve(data);
+                    dc: {
+                        _attributes: {
+                            type:'Datacenter'
+                        },
+                        _value: dataCenterName
+                    },
+                    id: poolId, //Get it from QueryIpPools
+                    force: false
+                }
+                },appData,function(err,data,resHeaders) {
+                    resolve(data);
+                });
             });
-        });
+        }
     });
 }
 
 function destroyTask(appData,objType,name) {
     return new Promise(function(resolve,reject) {
-        getIdByMobName(appData,objType,name).done(function(response) {
-            if(response == false) {
+        getIdByMobName(appData,objType,name).done(function(objId) {
+            if(objId == false) {
                 resolve({Fault:{faultstring:objType + ' ' + name + " doesn't exist"}});
                 return;
             }
@@ -113,10 +140,14 @@ function destroyTask(appData,objType,name) {
                         _attributes : {
                             type: objType
                         },
-                        _value : response
+                        _value : objId
                     },
                 }
             },appData,function(err,data,resHeaders) {
+                //Clear the entry from cache
+                if(mobCache[objType] != null) {
+                    delete mobCache[objType][objId];
+                }
                 resolve(data);
             });
         });
@@ -194,10 +225,12 @@ function retrievePropertiesEx(appData,sessKey,objType,name) {
 }
 
 
-function retrievePropertiesExForObj(appData,objType,name) {
+function retrievePropertiesExForObj(appData,objType,name,path) {
     var pathSet = 'name';
     if(objType == 'Task')
         pathSet = 'info';
+    if(path != null)
+        pathSet = path;
     return new Promise(function(resolve,reject) {
         vCenterApi.doCall({
             method    : 'RetrievePropertiesEx',
@@ -256,22 +289,48 @@ function retrieveServiceContent(appData) {
     });
 }
 
-function getIdByMobName(appData,objType,name) {
+function getRootFolder(appData,folderName,objType) {
     return new Promise(function(resolve,reject) {
-        //Hack
-        // if(objType == 'Datacenter' && name == 'kiran_dc')
-        //     resolve('datacenter-5218');
-        // if(objType == 'DistributedVirtualSwitch' && name == 'kiran_dvswitch')
-        //     resolve('dvs-5613'); 
-        // if(objType == 'DistributedVirtualPortgroup' && name == 'vn2')
-        //     resolve('dvportgroup-5685');
-        retrieveServiceContent(appData).done(function(response) {
-            logutils.logger.debug(response);
-            if(response['Fault'] != null) {
-                resolve(response);
-                return;
-            }
-            var folderName = response['RetrieveServiceContentResponse']['returnval']['rootFolder']['_value'];
+        if(folderName != null)
+            resolve(folderName);
+        //In case of DistributedVirtualPortgroup,always use networkFolder
+        //else it will corrupt the cache by populating portGroup's form other datacenters
+        if(objType == 'DistributedVirtualPortgroup') {
+            populatevCenterParams(appData).done(function(response) {
+                getNetworkFolderForDataCenter(appData,dataCenterName).done(function(folderName) {
+                    resolve(folderName);
+                });
+            });
+            return;
+        }
+        if(rootFolder != null)
+            resolve(rootFolder);
+        else
+            retrieveServiceContent(appData).done(function(response) {
+                var folderName = response['RetrieveServiceContentResponse']['returnval']['rootFolder']['_value'];
+                rootFolder = folderName;
+                resolve(folderName);
+            });
+    });
+}
+
+function getNetworkFolderForDataCenter(appData,datacenterId) {
+    return new Promise(function(resolve,reject) {
+        if(networkFolder != null) {
+            resolve(networkFolder);
+        } else
+            retrievePropertiesExForObj(appData,'Datacenter',datacenterId,'networkFolder').done(function(response) {
+                var folderName = response['RetrievePropertiesExResponse']['returnval']['objects']['propSet']['val']['_value'];
+                networkFolder = folderName;
+                resolve(folderName);
+            });
+    });
+}
+
+
+function getIdByMobName(appData,objType,name,folderName) {
+    return new Promise(function(resolve,reject) {
+        getRootFolder(appData,folderName,objType).done(function(folderName) {
             createContainerView(appData,folderName,objType,name).done(function(response) {
                 if(response['Fault'] != null) 
                     resolve(response);
@@ -281,8 +340,28 @@ function getIdByMobName(appData,objType,name) {
                         if(response['Fault'] != null) 
                             resolve(response);
                         else {
-                            var objArr = response['RetrievePropertiesExResponse']['returnval']['objects']['propSet']['val'][0]['_value']['ManagedObjectReference'];
+                            var objArr = response['RetrievePropertiesExResponse']['returnval']['objects']['propSet']['val'];
+                            if(objArr instanceof Array)
+                                objArr = objArr[0]['_value']['ManagedObjectReference'];
+                            else
+                                objArr = objArr['ManagedObjectReference'];
+                            //If only one entity is present,wrap it in an array 
+                            if(!(objArr instanceof Array)) 
+                                objArr = [objArr];
                             function matchObjName(objId,callback) {
+                                //If we are maintaining cache for the given mobType
+                                if(objType in mobCache) {
+                                    if(mobCache[objType][objId['_value']] != null) {
+                                        if(mobCache[objType][objId['_value']] == name) {
+                                            resolve(objId['_value']);
+                                            callback({'found':true},true);
+                                            return;
+                                        } else {
+                                            callback(null,false);
+                                            return;
+                                        }
+                                    }
+                                }
                                 retrievePropertiesExForObj(appData,objType,objId['_value']).done(function(response) {
                                     if(response['Fault'] != null) {
                                         resolve(response);
@@ -290,6 +369,9 @@ function getIdByMobName(appData,objType,name) {
                                         var currName = response['RetrievePropertiesExResponse']['returnval']['objects']['propSet']['val']['_value'];
                                         var currid = response['RetrievePropertiesExResponse']['returnval']['objects']['obj']['_value'];
                                         logutils.logger.debug(currName,currid);
+                                        //Populate mobCache
+                                        if(objType in mobCache)
+                                            mobCache[objType][currid] = currName;
                                         if(currName == name) {
                                             resolve(currid);
                                             callback({'found':true},true);
@@ -335,7 +417,7 @@ function populatevCenterParams(appData) {
     });
 }
 //No of times to retry to check for a task status
-var maxRetryCnt = 30;
+var maxRetryCnt = 100;
 function waitForTask(appData,taskId,currDef,retryCnt) {
     if(retryCnt == null)
         retryCnt = 0;
@@ -345,15 +427,21 @@ function waitForTask(appData,taskId,currDef,retryCnt) {
     }
     retryCnt++;
     retrievePropertiesExForObj(appData,'Task',taskId).done(function(response) {
-    var currState = response['RetrievePropertiesExResponse']['returnval']['objects']['propSet']['val'][0]['_value']['state'];
-    if(currState == 'success')
-        currDef.resolve('complete');
-    else if(currState == 'error') {
-        currDef.resolve('');
-    } else 
-        setTimeout(function() {
-            waitForTask(appData,taskId,currDef);
-        },3000);
+        var currState = response['RetrievePropertiesExResponse']['returnval']['objects']['propSet']['val'][0]['_value']['state'];
+        if(currState == 'success')
+            currDef.resolve('complete');
+        else if(currState == 'error') {
+            currDef.resolve({
+                'Fault': {
+                    'faultstring': commonUtils.getValueByJsonPath(response,
+                        'RetrievePropertiesExResponse;returnval;objects;propSet;val;0;_value;error;fault;0;_value;faultMessage;message', 'Unknown error')
+                    }
+                });
+        } else {
+            setTimeout(function() {
+                waitForTask(appData,taskId,currDef);
+            },200);
+        }
     });
 }
 
@@ -365,11 +453,13 @@ function getProjectList (req, appData, callback)
         var projUUIDs = [],reqUrl = '';
         data = data['projects'];
         var projURLsArr = [];
-        for(var i=0;i<data.length;i++) {
-            projUUIDs.push(data[i]['uuid']);
-            reqUrl = '/project/' + data[i]['uuid'];
-            commonUtils.createReqObj(projURLsArr, reqUrl,global.HTTP_REQUEST_GET,
-                null,null,null,appData);
+        if(data instanceof Array) {
+            for(var i=0;i<data.length;i++) {
+                projUUIDs.push(data[i]['uuid']);
+                reqUrl = '/project/' + data[i]['uuid'];
+                commonUtils.createReqObj(projURLsArr, reqUrl,global.HTTP_REQUEST_GET,
+                    null,null,null,appData);
+            }
         }
         async.map(projURLsArr,commonUtils.getAPIServerResponse(configApiServer.apiGet, true),function(error,results) {
             for(var i=0;i<results.length;i++) {
@@ -392,17 +482,70 @@ function createNetwork(userData,appData,callback) {
             callback(null,{'Fault': {'faultstring': "Given Datacenter/switchname doesn't exist"}});
             return;
         }
-        createPortGroup(userData,appData,callback).done(function(response) {
-            var portGroupId = null;
-            if(response['Fault'] != null) {
-                callback(null,response);
-                return;
-            }
-            getIdByMobName(appData,'DistributedVirtualPortgroup',userData['name']).done(function(response) {
-                portGroupId = response;
-                userData['portGroupId'] = portGroupId;
-                createIpPool(userData,appData,callback).done(function(response) {
+        getNetworkFolderForDataCenter(appData,dataCenterName).done(function(folderName) {
+            getIdByMobName(appData,'DistributedVirtualPortgroup',userData['name'],folderName).done(function(response) {
+                if(response['Fault'] != null) {
                     callback(null,response);
+                    return;
+                }
+                if(response != false) {
+                    callback(null,{'Fault': {'faultstring': "Network '" + userData['name'] + "' already exists"}});
+                    return;
+                }
+                createPortGroup(userData,appData,callback).done(function(response) {
+                    var portGroupId = null;
+                    if(response['Fault'] != null) {
+                        if(response['Fault']['detail'] != null && response['Fault']['detail']['ManagedObjectNotFoundFault'] !=  null) {
+                            dataCenterName = null;
+                            vSwitchName  = null;
+                            createNetwork(userData,appData,callback);
+                        } else {
+                            callback(null,response);
+                        }
+                        return;
+                    }
+                    getNetworkFolderForDataCenter(appData,dataCenterName).done(function(folderName) {
+                        getIdByMobName(appData,'DistributedVirtualPortgroup',userData['name'],folderName).done(function(response) {
+                            portGroupId = response;
+                            userData['portGroupId'] = portGroupId;
+                            //Check if ip-pool already exists
+                            queryIpPools(appData).done(function(response) {
+                                if(response['ip-pool-for-' + userData['name']] != null) {
+                                    destroyIpPool(appData,response['ip-pool-for-' + userData['name']]).done(function(response) {
+                                        if(response['Fault'] != null) {
+                                            callback(null,response);
+                                            return;
+                                        }
+                                        createIpPool(userData,appData,callback).done(function(response) {
+                                            //If creation of ip-pool fails,delete the portGroup also
+                                            if(response['Fault'] != null) {
+                                                destroyTask(appData,'DistributedVirtualPortgroup',userData['name']).done(function(data) {
+                                                    if(data['Fault'] != null) {
+                                                        callback(null,response);
+                                                        return;
+                                                    }
+                                                });
+                                            }
+                                            callback(null,response);
+                                        });
+                                    });
+                                } else {
+                                    createIpPool(userData,appData,callback).done(function(response) {
+                                        //If creation of ip-pool fails,delete the portGroup also
+                                        if(response['Fault'] != null) {
+                                            destroyTask(appData,'DistributedVirtualPortgroup',userData['name']).done(function(data) {
+                                                if(data['Fault'] != null) {
+                                                    callback(null,response);
+                                                    return;
+                                                }
+                                            });
+                                        }
+                                        callback(null,response);
+                                    });
+                                }
+                            });
+                        });
+                    });
                 });
             });
         });
@@ -441,10 +584,6 @@ function createPortGroup(userData,appData,callback) {
                                 },
                                 securityPolicy : {
                                     inherited : false,
-                                    allowPromiscuous: {
-                                        inherited : false,
-                                        value : true
-                                    },
                                     macChanges : {
                                         inherited: false,
                                         value: true
@@ -456,7 +595,11 @@ function createPortGroup(userData,appData,callback) {
                                 }
                             }
                         },
-                        type: 'earlyBinding'
+                        type: 'earlyBinding',
+                        vendorSpecificConfig : {
+                            key: 'external_ipam',
+                            opaqueData: userData['static_ip']
+                        }
                     }
                 }
             };
@@ -480,6 +623,9 @@ function createPortGroup(userData,appData,callback) {
 }
 
 function createIpPool(userData,appData,callback) {
+    var ipPoolEnabled = false;
+    if(userData['subnet']['range'] != null)
+        ipPoolEnabled = true;
     var ipPoolData = {
                 method    : 'CreateIpPool',
                 headers : {
@@ -504,9 +650,9 @@ function createIpPool(userData,appData,callback) {
                             subnetAddress: userData['subnet']['address'],
                             netmask: userData['subnet']['netmask'],
                             gateway:userData['subnet']['gateway'],
-                            dhcpServerAvailable : false/*,
-                            ipPoolEnabled : true    //Check - range is mandatory for setting this to true??
-                            */
+                            range : userData['subnet']['range'],
+                            dhcpServerAvailable : false,
+                            ipPoolEnabled : ipPoolEnabled
                         },
                         networkAssociation: {
                             network: {
@@ -520,6 +666,10 @@ function createIpPool(userData,appData,callback) {
                     },
                 }
             };
+    if(ipPoolEnabled == false) {
+        delete ipPoolData['params']['pool']['ipv4Config']['range'];
+    }
+    logutils.logger.info('createIpPool request',ipPoolData);
     return new Promise(function(resolve,reject) {
         vCenterApi.doCall(ipPoolData,appData,function(err,data,resHeaders) {
             resolve(data);
@@ -539,3 +689,8 @@ exports.destroyTask = destroyTask;
 exports.destroyIpPool = destroyIpPool;
 exports.queryIpPools = queryIpPools;
 exports.logout = logout;
+exports.getIdByMobName = getIdByMobName;
+exports.retrievePropertiesExForObj = retrievePropertiesExForObj;
+exports.populatevCenterParams = populatevCenterParams;
+exports.getNetworkFolderForDataCenter = getNetworkFolderForDataCenter;
+exports.dataCenterName = dataCenterName;

@@ -5,7 +5,7 @@
 var config = {};
 
 config.orchestration = {};
-config.orchestration.Manager = 'openstack'
+config.orchestration.Manager = 'openstack';
 
 /****************************************************************************
  * This boolean flag indicates to communicate with Orchestration
@@ -22,6 +22,45 @@ config.orchestration.Manager = 'openstack'
  *
 *****************************************************************************/
 config.serviceEndPointFromConfig = true;
+
+/****************************************************************************
+ * This boolean flag specifies wheather region list should be taken from config
+ * file or from keystone endpoint
+ * true  - If set as true, then keystone endpoint is taken from
+ *         config.regions
+ * false - If set as false, then keystone endpoint is taken from
+ *         config.identityManager
+ *
+ ****************************************************************************/
+config.regionsFromConfig = false;
+
+/****************************************************************************
+ * Below are the configs for Api Server and analytics Service type & name as
+ * provisioned in keystone
+ *
+ * apiServiceType - Service Type for apiServer, default value is apiServer
+ * opServiceType  - Service Type for analytics, default value is opServer
+ *
+ * Note: If there are multiple api server or analytices nodes in a specific
+ *       region, then provision service type/name as ApiServer0, ApiServer1,
+ *       ApiServer2 etc, similarly for analytics node: OpServer0, OpServer1,
+ *       OpServer2 etc.
+ *
+ ****************************************************************************/
+config.endpoints = {};
+config.endpoints.apiServiceType = 'ApiServer';
+config.endpoints.opServiceType = 'OpServer';
+
+/****************************************************************************
+ * Mapping to region name with keystone endpoint
+ *
+ * For example:
+ * config.regions.RegionOne = 'http://nodeIp:5000/v2.0';
+ * config.regions.RegionTwo = 'http://nodeIp:5000/v3';
+ *
+ ****************************************************************************/
+config.regions = {};
+config.regions.RegionOne = 'http://127.0.0.1:5000/v2.0';
 
 /****************************************************************************
  * This boolean flag indicates if serviceEndPointFromConfig is set as false,
@@ -110,6 +149,15 @@ config.identityManager.authProtocol = 'http';
 config.identityManager.apiVersion = ['v2.0'];
 config.identityManager.strictSSL = false;
 config.identityManager.ca = '';
+/******************************************************************************
+ * The hash algorithm to use for PKI tokens. This can be set to any algorithm
+ * that keystone hashlib supports, this should match with value of
+ * hash_algorithm in keystone.conf.
+ *
+ * default: 'md5'
+ *
+******************************************************************************/
+config.identityManager.pkiTokenHashAlgorithm = 'md5';
 
 config.storageManager = {};
 config.storageManager.ip = '127.0.0.1';
@@ -155,7 +203,7 @@ config.files.download_path = '/tmp';
 /* Cassandra Server */
 config.cassandra = {};
 config.cassandra.server_ips = ['127.0.0.1'];
-config.cassandra.server_port = '9160';
+config.cassandra.server_port = '9042';
 config.cassandra.enable_edit = false;
 
 /* KUE Job Scheduler */
@@ -237,7 +285,7 @@ config.getDomainProjectsFromApiServer = false;
  *
  * username - This username required while login.
  * password - This password required while login.
- * roles    - User role, options are 'superAdmin' and 'member';
+ * roles    - User role, options are 'cloudAdmin' and 'member';
  *
  * NOTE: This username and password is not used to authenticate using some
  *       identity manager.
@@ -249,9 +297,28 @@ config.staticAuth = [];
 config.staticAuth[0] = {};
 config.staticAuth[0].username = 'admin';
 config.staticAuth[0].password = 'contrail123';
-config.staticAuth[0].roles = ['superAdmin'];
+config.staticAuth[0].roles = ['cloudAdmin'];
 
-
+/*****************************************************************************
+ * Below are the mappings from external roles provided by identity manager
+ * to UI roles. Currently from UI, we have only cloudAdmin role.
+ *
+ * If any of the external role matches with the list as mapped with cloudAdmin,
+ * the user is treated as cloudAdmin, else if any of the external member role
+ * matches with the UI member role, user is treated as member.
+ *
+ * '*' in config.roleMaps.cloudAdmin signifies that if a user role does not
+ * match with any role in config.roleMaps.member, then it is treated as
+ * non-member role
+ *
+ * Please note that for orchestration model, no-orch, vcenter and cloudstack, we
+ * assume UI role as cloudAdmin
+ *
+ *****************************************************************************/
+config.roleMaps = {};
+config.roleMaps.cloudAdmin = ['admin', 'KeystoneAdmin',
+    'KeystoneServiceAdmin', 'netadmin', 'sysadmin', '*'];
+config.roleMaps.member = ['Member', '_member_'];
 
 /*****************************************************************************
 * Below are the delimiter list for physical/logical interface creation.
@@ -261,10 +328,13 @@ config.physicaldevices = {};
 config.physicaldevices.interface_delimiters = ['.', ':'];
 
 /*****************************************************************************
-* Below are the disabled list of UI features.
+* Below are the optional feature list which can be enabled/disabled from
+* UI Menu.
+*
 *****************************************************************************/
-config.features = {};
-config.features.disabled = ['mon_infra_underlay'];
+config.optFeatureList = {};
+config.optFeatureList.mon_infra_underlay = false;
+config.optFeatureList.mon_infra_mx = false;
 
 /*****************************************************************************
 * Below are the configurations used only for ui
@@ -276,6 +346,14 @@ config.ui = {};
 *****************************************************************************/
 config.ui.nodemanager = {};
 config.ui.nodemanager.installed = true;
+
+/*****************************************************************************
+* Below is the delimiter for contrail dropdown.
+* By using this able to store more information in dropdown value,
+* later used this information in post payload.
+* Default value : [';']
+*****************************************************************************/
+config.ui.dropdown_value_separator = ";";
 
 // vcenter related parameters
 config.vcenter = {};
@@ -306,9 +384,14 @@ config.multi_tenancy.enabled = true;
  * NOTE: If the authentication is done via some identity manager (like
  * keystone), and if it is having some token expiry, then session timeout is set
  * to mimimum of token expiry and session.timeout config value
+ *
+ * secret_key - Session cookie is signed with this secret key to prevent
+ * tampering
  *****************************************************************************/
 config.session = {};
-config.session.timeout = 24 * 60 * 60 * 1000;
+config.session.timeout = 1 * 60 * 60 * 1000;
+config.session.secret_key =
+'enterasupbK3xg8qescJK.dUbdgfVq0D70UaLTMGTzO4yx5vVJral2zIhVersecretkey';
 
 /*****************************************************************************
  * router_L3Enable flag indicates whether to update external gateway 
@@ -317,8 +400,73 @@ config.session.timeout = 24 * 60 * 60 * 1000;
  * true - Will update external gateway information on router in neutron.
  * false - Will not update external gateway information on router in neutron.
  *****************************************************************************/
- config.network = {}
- config.network.router_L3Enable = true;
+config.network = {}
+config.network.router_L3Enable = true;
+
+/*****************************************************************************
+ * The below section specifies the list of allowed ports when requested through
+ * proxy.
+ * enabled - if set true, proxy feature will be enabled, else will be disabled, and
+ * all proxy request will be responded back with error.
+ * vrouter_node_ports - the allowed port list when the ip/host in proxy URL
+ *      used has role as vrouter/agent node
+ * control_node_ports - the allowed port list when the ip/host in proxy URL
+ *      used has role as control node
+ * analytics_node_ports - the allowed port list when the ip/host in proxy URL
+ *      used has role as analytics node
+ * config_node_ports - the allowed port list when the ip/host in proxy URL
+ *      used has role as config node
+ *
+ *****************************************************************************/
+config.proxy = {};
+config.proxy.enabled = true;
+config.proxy.vrouter_node_ports = [
+    '8085', /* HttpPortAgent */
+    '8102', /* HttpPortVRouterNodemgr */
+];
+config.proxy.control_node_ports = [
+    '8083', /* HttpPortControl */
+    '8092', /* HttpPortDns */
+    '8101', /* HttpPortControlNodemgr */
+
+];
+config.proxy.analytics_node_ports = [
+    '8081', /* OpServerPort */
+    '8089', /* HttpPortCollector */
+    '8090', /* HttpPortOpserver */
+    '8091', /* HttpPortQueryEngine */
+    '8104', /* HttpPortAnalyticsNodemgr */
+];
+config.proxy.config_node_ports = [
+    '5998', /* DiscoveryServerPort */
+    '8082', /* ApiServerPort */
+    '8084', /* HttpPortApiServer */
+    '8087', /* HttpPortSchemaTransformer */
+    '8088', /* HttpPortSvcMonitor */
+    '8096', /* HttpPortDeviceManager */
+    '8100', /* HttpPortConfigNodemgr */
+];
+
+/*****************************************************************************
+ *
+ * This section describes the various options for server configurations.
+ *
+ * ciphers:
+ *      A string describing the ciphers to use or exclude. Consult
+ *      <http://www.openssl.org/docs/apps/ciphers.html#CIPHER_LIST_FORMAT> for
+ *      details on the format.
+ *
+ *  key_file:
+ *      Private key file path to use for SSL
+ *  cert_file:
+ *      Public x509 certificate file path to use
+ *
+ *****************************************************************************/
+config.server_options = {};
+config.server_options.ciphers =
+    'ECDHE-RSA-AES256-SHA384:AES256-SHA256:RC4-SHA:RC4:HIGH:!MD5:!aNULL:!EDH:!AESGCM';
+config.server_options.key_file = '/usr/src/contrail/contrail-web-core/keys/cs-key.pem';
+config.server_options.cert_file = '/usr/src/contrail/contrail-web-core/keys/cs-cert.pem';
 
 // Export this as a module.
 module.exports = config;

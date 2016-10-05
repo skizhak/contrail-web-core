@@ -45,6 +45,8 @@ package:
 	cp -a webroot/html/login-error.tmpl webroot/html/login-error.html
 	./generate-files.sh 'prod-env' $(REPO)
 	./dev-install.sh
+	# build the minified, unified files.
+	./build-files.sh "prod-env" $(REPO)
 	./prod-dev.sh webroot/html/dashboard.html prod_env dev_env true
 	./prod-dev.sh webroot/html/login.html prod_env dev_env true
 	./prod-dev.sh webroot/html/login-error.html prod_env dev_env true
@@ -73,22 +75,30 @@ dev-env:
 	./prod-dev.sh webroot/html/login.html dev_env prod_env true
 	./prod-dev.sh webroot/html/login-error.html dev_env prod_env true
 	make make-ln
+	# For test files, we will setting the env file with current environment.
+	./unit-test.sh set-env "dev"
 
 test-env:
-	make dev-env
-	./unit-test.sh init
+	./unit-test.sh init $(REPO)
+
+ui-schemas:
+	node webroot/js/common/transformer.js
 
 prod-env:
 	mkdir -p webroot/html
 	ln -sf ../../webroot/html/dashboard.tmpl webroot/html/dashboard.html
 	ln -sf ../../webroot/html/login.tmpl webroot/html/login.html
 	ln -sf ../../webroot/html/login-error.tmpl webroot/html/login-error.html
-	./generate-files.sh "prod-env" $(REPO)
+	./generate-files.sh "dev-env" $(REPO)
 	./dev-install.sh
+	# build the minified, unified files.
+	./build-files.sh "prod-env" $(REPO)
 	./prod-dev.sh webroot/html/dashboard.html prod_env dev_env true
 	./prod-dev.sh webroot/html/login.html prod_env dev_env true
 	./prod-dev.sh webroot/html/login-error.html prod_env dev_env true
 	make make-ln
+	# For test files, we will setting the env file with current environment.
+	./unit-test.sh set-env "prod"
 
 clear-cache-dev:
 	./prod-dev.sh webroot/html/dashboard.html dev_env prod_env false
